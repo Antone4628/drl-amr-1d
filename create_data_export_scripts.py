@@ -208,7 +208,7 @@ sed -i "s/{{{{ICASE}}}}/$ICASE/g" "$CURRENT_CONFIG"
 echo "✓ Configuration file prepared with $TOTAL_TIMESTEPS timesteps"
 
 # Change to project directory
-cd /bsuhome/antonechacartegu/projects/drl-amr/1D-Wave-AMR
+cd /bsuhome/antonechacartegu/projects/drl-amr-1d
 
 # Run training with no-timestamp flag for predictable directory structure
 echo "Starting training with enhanced_callback_data..."
