@@ -1,0 +1,14 @@
+# Core scientific computing
+numpy
+scipy
+pandas
+matplotlib
+seaborn
+
+# Machine learning
+torch
+stable-baselines3
+gymnasium
+
+# Utilities
+pyyaml
