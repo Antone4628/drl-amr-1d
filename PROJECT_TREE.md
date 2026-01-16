@@ -1,6 +1,6 @@
 # Project Tree
 
-Generated: 2026-01-15 15:46:11
+Generated: 2026-01-16 13:20:28
 Project: drl-amr-1d
 Included: all files
 Data dirs: collapsed
@@ -12,6 +12,7 @@ drl-amr-1d/
 │   │   ├── comprehensive_analyzer.py
 │   │   ├── dg_wave_solver_evaluation.py
 │   │   ├── evaluate_single_model_by_index.py
+│   │   ├── key_models_analyzer.py
 │   │   ├── model_marker_evaluation.py
 │   │   ├── pareto_key_models_analyzer.py
 │   │   └── single_model_runner.py
@@ -57,10 +58,12 @@ drl-amr-1d/
 │   └── batch_model_evaluation_template.slurm
 ├── tools/
 │   └── tree_gen.py
-├── copy_files.sh
 ├── create_batch_evaluation_jobs.py
 ├── create_data_export_scripts.py
-└── PROJECT_TREE.md
+├── PROJECT
+├── PROJECT_TREE.md
+├── README.md
+└── requirements.txt
 ```
 
 ---
