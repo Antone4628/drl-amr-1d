@@ -1,20 +1,34 @@
+"""Basis functions for Discontinuous Galerkin discretization.
+
+This module provides Legendre polynomial evaluation, Legendre-Gauss-Lobatto
+(LGL) quadrature nodes and weights, and Lagrange interpolation basis functions.
+These are the foundational building blocks for the DG spatial discretization.
+
+Key Functions:
+    leg_poly: Evaluate Legendre polynomial and derivatives at a point.
+    lgl_gen: Generate LGL quadrature nodes and weights.
+    Lagrange_basis: Compute Lagrange basis functions on LGL nodes.
+
+Note:
+    All functions operate on the reference element [-1, 1].
+"""
 import numpy as np
 
 #Legendre-Poly
-def leg_poly(p: int,x):
-
-    """
-    Computes Legendre polynomial and its first/second derivatives.
+def leg_poly(p: int, x: float):
+    """Evaluate Legendre polynomial and its derivatives at a point.
+    
+    Uses the three-term recurrence relation to compute P_p(x) and its
+    first two derivatives.
     
     Args:
-        p (int): Polynomial order
-        x (float): Point at which to evaluate polynomial
+        p: Polynomial order (degree). Must be non-negative.
+        x: Evaluation point in [-1, 1].
         
     Returns:
-        tuple: (L0, L0_1, L0_2) where:
-            L0: Legendre polynomial value
-            L0_1: First derivative
-            L0_2: Second derivative
+        L0: Legendre polynomial value P_p(x).
+        L0_1: First derivative dP_p/dx at x.
+        L0_2: Second derivative d²P_p/dx² at x.
     """
     
     L1, L1_1, L1_2 = 0, 0, 0
@@ -33,17 +47,23 @@ def leg_poly(p: int,x):
     
 
 ### Routine for generating Legendre-Gauss_Lobatto points
-def lgl_gen(P):
-    """
-    Generates Legendre-Gauss-Lobatto nodes and weights.
+def lgl_gen(P: int):
+    """Generate Legendre-Gauss-Lobatto quadrature nodes and weights.
+    
+    LGL nodes are the roots of (1-x²)P'_{P-1}(x), which always include
+    the endpoints x = ±1. Used for both interpolation and integration.
     
     Args:
-        P (int): Number of interpolation nodes (order + 1)
+        P: Number of nodes (polynomial order + 1). Must be >= 2.
         
     Returns:
-        tuple: (nodes, weights)
-            nodes: Array of LGL nodes
-            weights: Corresponding quadrature weights
+        lgl_nodes: LGL node locations in [-1, 1], shape (P,).
+        lgl_weights: Corresponding quadrature weights, shape (P,).
+    
+    Note:
+        Nodes are computed via Newton iteration on the Legendre polynomial.
+        Weights satisfy: ∫₋₁¹ f(x)dx ≈ Σᵢ wᵢ f(xᵢ) (exact for polynomials
+        of degree ≤ 2P-3).
     """
     # P is number of interpolation nodes. (P = order + 1)
     p = P-1 #Poly order
@@ -82,20 +102,26 @@ def lgl_gen(P):
     return lgl_nodes,lgl_weights
 
 #Lagrange basis
-def Lagrange_basis(P, Q, xlgl, xs):
-    """
-    Computes Lagrange basis functions and their derivatives.
+def Lagrange_basis(P: int, Q: int, xlgl, xs):
+    """Compute Lagrange basis functions and derivatives at quadrature points.
+    
+    Evaluates the P Lagrange interpolating polynomials (defined on xlgl nodes)
+    at Q quadrature points xs. Used for interpolation and differentiation
+    in the DG formulation.
     
     Args:
-        P (int): Number of interpolation points
-        Q (int): Number of quadrature points
-        xlgl (array): LGL nodes
-        xs (array): Quadrature points
+        P: Number of interpolation points (basis functions).
+        Q: Number of quadrature points to evaluate at.
+        xlgl: Interpolation nodes (typically LGL), shape (P,).
+        xs: Evaluation points (quadrature nodes), shape (Q,).
         
     Returns:
-        tuple: (psi, dpsi)
-            psi: Lagrange basis functions [P,Q]
-            dpsi: Derivatives of basis functions [P,Q]
+        psi: Basis function values, shape (P, Q). psi[i,l] = Lᵢ(xs[l]).
+        dpsi: Basis function derivatives, shape (P, Q). dpsi[i,l] = dLᵢ/dx(xs[l]).
+    
+    Note:
+        Lagrange basis Lᵢ(x) = ∏_{j≠i} (x - xⱼ)/(xᵢ - xⱼ) satisfies
+        Lᵢ(xⱼ) = δᵢⱼ (Kronecker delta).
     """
     psi  = np.zeros([P,Q]) # PxQ matrix
     dpsi = np.zeros([P,Q])
