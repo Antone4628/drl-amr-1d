@@ -27,3 +27,5 @@ logs/
 tensorboard/
 checkpoints/
 *.zip
+notebooks/.ipynb_checkpoints/
+notebooks/*.svg

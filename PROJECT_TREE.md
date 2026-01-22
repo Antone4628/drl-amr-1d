@@ -1,6 +1,6 @@
 # Project Tree
 
-Generated: 2026-01-16 13:20:28
+Generated: 2026-01-20 18:37:57
 Project: drl-amr-1d
 Included: all files
 Data dirs: collapsed
@@ -29,6 +29,9 @@ drl-amr-1d/
 │   │   └── param_sweep/
 │   │       └── base_template.yaml
 │   └── run_experiments_mixed_gpu.py
+├── notebooks/
+│   ├── amr_plot_1768860862.svg
+│   └── interactive_amr_testing.ipynb
 ├── numerical/
 │   ├── amr/
 │   │   ├── __init__.py
@@ -56,11 +59,16 @@ drl-amr-1d/
 │   └── __init__.py
 ├── slurm_scripts/
 │   └── batch_model_evaluation_template.slurm
+├── tests/
+│   └── amr/
+│       ├── test_adapt.py
+│       └── test_forest.py
 ├── tools/
 │   └── tree_gen.py
+├── 1D_DRL_AMR_COMPLETE_WORKFLOW.md
+├── BORAH_PROJECT_TREE.md
 ├── create_batch_evaluation_jobs.py
 ├── create_data_export_scripts.py
-├── PROJECT
 ├── PROJECT_TREE.md
 ├── README.md
 └── requirements.txt

@@ -1,3 +1,21 @@
+"""Mesh adaptation routines for Adaptive Mesh Refinement.
+
+This module provides functions for marking elements for refinement/coarsening,
+adapting the mesh structure, and projecting the solution between meshes.
+
+Key Functions:
+    mark: Mark elements for refinement or coarsening based on solution.
+    adapt_mesh: Perform mesh refinement/coarsening based on marks.
+    adapt_sol: Project solution to adapted mesh using scatter/gather.
+    check_balance: Verify mesh satisfies 2:1 balance constraint.
+    enforce_balance: Iteratively refine to restore 2:1 balance.
+
+Note:
+    The 2:1 balance constraint requires that neighboring elements differ
+    by at most one refinement level. This prevents excessive jumps in
+    resolution across element boundaries.
+"""
+
 import numpy as np
 from .forest import get_active_levels
 from ..grid.mesh import create_grid_us
@@ -5,54 +23,61 @@ from ..grid.mesh import create_grid_us
 #~~~~~~~~~~~~~~~~~~~ single refine/coarsen routine ~~~~~~~~~~~~~~~~~~~~~~~~
 
 def mark(active_grid, label_mat, intma, q, criterion, threshold=0.5):
-    """
-    Mark elements for refinement/coarsening based on solution criteria.
+    """Mark elements for refinement or coarsening based on solution criteria.
+    
+    Examines solution values on each element and marks for adaptation.
+    Coarsening only occurs when both siblings qualify.
     
     Args:
-        active_grid (array): Currently active element indices
-        label_mat (array): Element family relationships [rows, 4]
-        intma (array): Element-node connectivity
-        q (array): Solution values
-        criterion (int): Determines which marking criterion to use
-            - criterion = 1: refine when solution > 0.5. Used for building out AMR
-            - criterion = 2: Brennan's Criterion
+        active_grid: Currently active element IDs (1-indexed), shape (n_active,).
+        label_mat: Element relationships from forest(), shape (total_elements, 5).
+        intma: Element-node connectivity, shape (ngl, n_active).
+        q: Solution values at nodes, shape (npoin_dg,).
+        criterion: Marking criterion to use:
+            - 1: Threshold-based (refine if max(q) >= threshold)
+            - 2: Reserved for future use
+        threshold: Solution threshold for refinement. Defaults to 0.5.
         
     Returns:
-        marks (array): Element markers (-1:derefine, 0:no change, 1:refine)
-            
-    Notes:
-        - Elements with solution values >= 0.5 are marked for refinement
-        - Elements with solution values < 0.5 are marked for derefinement
-        - Derefinement only occurs if both siblings meet criteria
+        marks: Adaptation markers, shape (n_active,).
+            -1 = coarsen, 0 = no change, 1 = refine.
+    
+    Note:
+        Coarsening requires both siblings to be marked. If only one sibling
+        qualifies, neither is coarsened.
     """
     n_active = len(active_grid)
     marks = np.zeros(n_active, dtype=int)
-    refs = []
-    defs = []
+    refs = [] # Track elements marked for refinement
+    defs = [] # Track elements marked for coarsening (to avoid double-marking)
     
-    # Pre-compute label matrix lookups
-    parents = label_mat[active_grid - 1, 1]
-    children = label_mat[active_grid - 1, 2:4]
+    # Pre-compute label_mat lookups for all active elements
+    parents = label_mat[active_grid - 1, 1]    # Parent IDs (0 = no parent)
+    children = label_mat[active_grid - 1, 2:4] # [child1, child2] IDs (0 = no children)
     
     # Process each active element
     for idx, (elem, parent) in enumerate(zip(active_grid, parents)):
-        # Get element solution values
+        # Get solution values on this element
         elem_nodes = intma[:, idx]
         elem_sols = q[elem_nodes]
         max_sol = np.max(elem_sols)
         
         # Check refinement criteria
         if (criterion == 1):
+            # Threshold-based marking: refine if max solution >= threshold
+            
+            # Check refinement: element must have children (not at max level)
             if max_sol >= threshold and children[idx, 0] != 0:
             # if max_sol >= - 0.5 and children[idx, 0] != 0:
                 refs.append(elem)
                 marks[idx] = 1
                 continue
                 
-            # Check coarsening criteria
+            # Check coarsening: element must have a parent (not at base level)
             if max_sol < threshold and parent != 0:
-                # Find sibling
+                # Find sibling by checking neighbors with same parent
                 sibling = None
+                sib_idx = None
                 if elem > 1 and label_mat[elem-2, 1] == parent:
                     sibling = elem - 1
                     sib_idx = idx - 1
@@ -60,19 +85,16 @@ def mark(active_grid, label_mat, intma, q, criterion, threshold=0.5):
                     sibling = elem + 1
                     sib_idx = idx + 1
                     
-                # Verify sibling status
+                # Coarsen only if sibling is also active and qualifies
                 if sibling in active_grid:
                     sib_nodes = intma[:, sib_idx]
                     sib_sols = q[sib_nodes]
                     
-                    # Mark for coarsening if sibling also qualifies
+                    # Mark both siblings if sibling also below threshold
                     if np.max(sib_sols) < threshold and sibling not in defs:
                         marks[idx] = marks[sib_idx] = -1
                         defs.extend([elem, sibling])
         
-        if (criterion == 2):
-            #Brennan will create criterion here
-            pass
 
     
     return  marks
@@ -80,43 +102,92 @@ def mark(active_grid, label_mat, intma, q, criterion, threshold=0.5):
 
 
 def check_balance(active_grid, label_mat):
-    """
-    Check balance of active grid. 
-    Returns True if balanced, False otherwise.
+    """Check if mesh satisfies 2:1 balance constraint.
+    
+    A mesh is balanced if neighboring elements differ by at most one
+    refinement level.
+    
+    Args:
+        active_grid: Active element IDs (1-indexed), shape (n_active,).
+        label_mat: Element relationships from forest(), shape (total_elements, 5).
+        
+    Returns:
+        True if mesh is balanced, False otherwise.
     """
     levels = get_active_levels(active_grid, label_mat)
     balance_status = np.all(np.abs(np.diff(levels)) <= 1)
     return balance_status
 
 def balance_mark(active, label_mat):
+    """Mark elements that need refinement to restore 2:1 balance.
+    
+    Identifies element pairs where the level difference exceeds 1 and
+    marks the coarser element for refinement.
+    
+    Args:
+        active: Active element IDs (1-indexed), shape (n_active,).
+        label_mat: Element relationships from forest(), shape (total_elements, 5).
+        
+    Returns:
+        Refinement markers, shape (n_active,). 1 = needs refinement, 0 = ok.
+    
+    Note:
+        Only marks for refinement, never coarsening. Called iteratively
+        by enforce_balance() until mesh is fully balanced.
+    """
     n_active = len(active)
     balance_marks = np.zeros(n_active, dtype=int)
     levels = get_active_levels(active, label_mat)
 
     for e in range(n_active):
-        # Get level of element and left neighbor
+        # Compare this element's level to left neighbor (periodic: e-1 wraps)
         elem_level = levels[e]
         left_level = levels[e-1]
         # Check level difference between elements
         level_difference = abs(elem_level - left_level)
 
         if level_difference > 1:
-            # Mark loest level element for refinement
+            # Mark the coarser (lower level) element for refinement
             if elem_level > left_level:
-                #left level is lower, mark left element for refinement
-                balance_marks[e-1] = 1
+                balance_marks[e-1] = 1 # Left neighbor is coarser
             elif elem_level < left_level:
-                #elem level is lower, mark current element for refinement
-                balance_marks[e] = 1
+                balance_marks[e] = 1 # Current element is coarser
 
     return balance_marks
 
 
 def enforce_balance(active, label_mat, grid, info_mat, nop, coord, PS1, PS2, PG1, PG2, ngl, xgl, qp, max_level):
-    """
-    Single step 2:1 Balance enforcement. 
-    This routine handles balance marking, mesh adapting, and solution adapting.
-    This routine is called only once per adaptation step.
+    """Iteratively enforce 2:1 balance constraint on the mesh.
+    
+    Repeatedly marks and refines elements until no neighboring elements
+    differ by more than one refinement level.
+    
+    Args:
+        active: Active element IDs (1-indexed), shape (n_active,).
+        label_mat: Element relationships from forest(), shape (total_elements, 5).
+        grid: Element boundary coordinates, shape (n_active + 1,).
+        info_mat: Element metadata from forest(), shape (total_elements, 5).
+        nop: Polynomial order.
+        coord: Node coordinates, shape (npoin_dg,).
+        PS1, PS2: Scatter matrices for refinement projection, shape (ngl, ngl).
+        PG1, PG2: Gather matrices for coarsening projection, shape (ngl, ngl).
+        ngl: Number of LGL nodes per element (nop + 1).
+        xgl: LGL node positions in reference element, shape (ngl,).
+        qp: Solution values, shape (npoin_dg,).
+        max_level: Maximum allowed refinement level.
+        
+    Returns:
+        bal_q: Balanced solution, shape (new_npoin_dg,).
+        bal_active: Balanced active elements, shape (new_n_active,).
+        bal_nelem: New element count.
+        bal_intma: New connectivity, shape (ngl, new_n_active).
+        bal_coord: New node coordinates, shape (new_npoin_dg,).
+        bal_grid: New element boundaries, shape (new_n_active + 1,).
+        bal_npoin_dg: New DG node count.
+        bal_periodicity: New periodicity array.
+    
+    Note:
+        May require multiple iterations (up to max_level) to fully balance.
     """
     bal_ctr = 0
     while (bal_ctr <= max_level):
@@ -151,20 +222,32 @@ def enforce_balance(active, label_mat, grid, info_mat, nop, coord, PS1, PS2, PG1
     return bal_q, bal_active, bal_nelem, bal_intma, bal_coord, bal_grid, bal_npoin_dg, bal_periodicity
 
 def adapt_mesh(nop, cur_grid, active, label_mat, info_mat, marks, max_level):
-    """
-    Unified mesh adaptation routine that handles both refinement and derefinement.
+    """Perform mesh adaptation based on refinement/coarsening markers.
+    
+    Processes marks sequentially: refining elements (replacing parent with
+    two children) or coarsening element pairs (replacing siblings with parent).
     
     Args:
-        nop: Number of points
-        cur_grid: Current grid coordinates
-        active: Active cells array
-        label_mat: Matrix containing parent-child relationships
-        info_mat: Matrix containing cell information
-        marks: Array indicating refinement (-1: derefine, 0: no change, 1: refine)
-    
+        nop: Polynomial order.
+        cur_grid: Current element boundaries, shape (n_active + 1,).
+        active: Current active element IDs (1-indexed), shape (n_active,).
+        label_mat: Element relationships from forest(), shape (total_elements, 5).
+        info_mat: Element metadata from forest(), shape (total_elements, 5).
+        marks: Adaptation markers, shape (n_active,).
+            -1 = coarsen, 0 = no change, 1 = refine.
+        max_level: Maximum allowed refinement level.
+        
     Returns:
-        tuple: (adapted grid, active cells, new element count, 
-               new CG point count, new DG point count)
+        cur_grid: Updated element boundaries, shape (new_n_active + 1,).
+        active: Updated active element IDs, shape (new_n_active,).
+        marks: Updated markers (all zeros after processing).
+        new_nelem: New element count.
+        new_npoin_cg: New CG node count.
+        new_npoin_dg: New DG node count.
+    
+    Note:
+        Elements at max_level cannot be refined further (warning printed).
+        Coarsening requires both siblings to be marked.
     """
     ngl = nop + 1
     
@@ -174,34 +257,37 @@ def adapt_mesh(nop, cur_grid, active, label_mat, info_mat, marks, max_level):
         return (cur_grid, active, marks,  new_nelem, 
                 nop * new_nelem + 1, ngl * new_nelem)
     
-    # Process adaptations one at a time
+    # Process marks sequentially (indices shift as we modify arrays)
     i = 0
     while i < len(marks):
         # print(f'processing element {i+1} with mark value {marks[i]}')
         if marks[i] == 0:
+            # No change — skip to next element
             i += 1
             continue
             
         if marks[i] > 0:
-            # Handle refinement
+            # === REFINEMENT ===
             elem = active[i]
             # print(f'refining element {elem}')
             level = label_mat[elem-1][4]
+            # Check max level constraint
             if level >= max_level:
                 print(f'Warning: Element {elem} is already at max refinement level {max_level}. Cancelling refinement.')
                 marks[i] = 0
                 i += 1
                 continue
             parent_idx = elem - 1
+
+            # Get children IDs from label_mat
             c1, c2 = label_mat[parent_idx][2:4]
-            # print(f'elemenet {elem} has children {c1} and {c2} ')
-            # c1_r = info_mat[c1-1][3]
+            # Get midpoint coordinate (right edge of child 1)
             c1_r = info_mat[c1-1][4]
             
-            # Update grid
+            # Insert midpoint into grid (splits parent element)
             cur_grid = np.insert(cur_grid, i + 1, c1_r)
             
-            # Update active cells and marks
+            # Replace parent with two children in active array
             active = np.concatenate([
                 active[:i],
                 [c1, c2],
@@ -214,15 +300,15 @@ def adapt_mesh(nop, cur_grid, active, label_mat, info_mat, marks, max_level):
                 marks[i+1:]
             ])
             
-            # Skip the newly added element
+            # Skip past both children
             i += 2
             
         elif marks[i] < 0:  
-            # Handle derefinement
+            # === COARSENING ===
             elem = active[i]
             parent = label_mat[elem-1][1]
             
-            # Find sibling
+            # Find sibling and determine which is first (lower index)
             if label_mat[elem-2][1] == parent and i > 0 and marks[i-1] < 0:
                 # Sibling is previous element
                 sib_idx = i - 1
@@ -232,30 +318,30 @@ def adapt_mesh(nop, cur_grid, active, label_mat, info_mat, marks, max_level):
                 sib_idx = i + 1
                 min_idx = i
             else:
-                # No valid sibling found for derefinement
+                # No valid sibling pair — skip
                 i += 1
                 continue
                 
-            # Remove grid point between elements
+            # Remove midpoint from grid (merges two children)
             cur_grid = np.delete(cur_grid, min_idx + 1)
             
-            # Update active cells and marks
+            # Replace both children with parent in active array
             active = np.concatenate([
                 active[:min_idx],
                 [parent],
                 active[min_idx+2:]
             ])
-            
+            # Update marks array
             marks = np.concatenate([
                 marks[:min_idx],
                 [0],
                 marks[min_idx+2:]
             ])
             
-            # Continue checking from the position after the derefined pair
+            # Continue from merged element position
             i = min_idx + 1
     
-    # Calculate new dimensions
+    # Calculate new mesh dimensions
     new_nelem = len(active)
     new_npoin_cg = nop * new_nelem + 1
     new_npoin_dg = ngl * new_nelem
@@ -264,48 +350,55 @@ def adapt_mesh(nop, cur_grid, active, label_mat, info_mat, marks, max_level):
 
 
 def adapt_sol(q, coord, marks, active, label_mat, PS1, PS2, PG1, PG2, ngl):
-    """
-    Adapts solution values during mesh adaptation using scatter/gather operations.
+    """Project solution onto adapted mesh using scatter/gather operations.
+    
+    For refinement: scatters parent solution to two children using PS1, PS2.
+    For coarsening: gathers two children solutions to parent using PG1, PG2.
     
     Args:
-        q (array): Current solution values
-        marks (array): Original refinement markers (-1: coarsen, 0: no change, 1: refine)
-        active (array): Original (pre-refinement) active element indices. Must correspond 
-                       to the original mesh that marks refers to, not the adapted mesh.
-        label_mat (array): Element family relationships [elem, parent, child1, child2]
-        PS1, PS2 (array): Scatter matrices for child 1 and 2 [ngl, ngl]
-        PG1, PG2 (array): Gather matrices for child 1 and 2 [ngl, ngl]
-        ngl (int): Number of LGL points per element
+        q: Current solution values, shape (npoin_dg,).
+        coord: Current node coordinates (unused, kept for API compatibility).
+        marks: Adaptation markers, shape (n_active,).
+            -1 = coarsen, 0 = no change, 1 = refine.
+        active: Active element IDs before adaptation (1-indexed), shape (n_active,).
+        label_mat: Element relationships from forest(), shape (total_elements, 5).
+        PS1, PS2: Scatter matrices for children 1 and 2, shape (ngl, ngl).
+        PG1, PG2: Gather matrices for children 1 and 2, shape (ngl, ngl).
+        ngl: Number of LGL nodes per element.
         
     Returns:
-        array: Adapted solution values
+        Adapted solution values, shape (new_npoin_dg,).
+    
+    Note:
+        The `active` array must correspond to the pre-adaptation mesh
+        (same ordering as `marks`), not the post-adaptation mesh.
     """
     
     new_q = []
     
     i = 0
     while i < len(marks):
-        # print(f"\nProcessing mark {i} for original active element {active[i]}:")
-        # print(f"Mark value: {marks[i]}")
         
         if marks[i] == 0:
-            # No adaptation - copy solution values
+            # === NO CHANGE ===
+            # Copy solution values directly
             elem_vals = q[i*ngl:(i+1)*ngl]
             new_q.extend(elem_vals)
             i += 1
             
         elif marks[i] == 1:
-            # Refinement - scatter parent solution to children
+            # === REFINEMENT ===
+            # Scatter parent solution to two children
             parent_elem = active[i]
             # Get parent solution values
             parent_vals = q[i*ngl:(i+1)*ngl]
             
-            # Get children from label_mat using original element number
+            # Get children IDs (for reference, not used in projection)
             child1, child2 = label_mat[parent_elem-1][2:4]
             
-            # Scatter to get child solutions using mesh-independent matrices
-            child1_vals = PS1 @ parent_vals
-            child2_vals = PS2 @ parent_vals
+            # Project using scatter matrices (mesh-independent)
+            child1_vals = PS1 @ parent_vals    # Left child gets left half
+            child2_vals = PS2 @ parent_vals    # Right child gets right half
             
             # Add both children's solutions
             new_q.extend(child1_vals)
@@ -313,7 +406,10 @@ def adapt_sol(q, coord, marks, active, label_mat, PS1, PS2, PG1, PG2, ngl):
             i += 1
             
         else:  # marks[i] == -1
-            # Handle coarsening
+            # === COARSENING ===
+            # Gather two children solutions to parent
+
+            # Verify we have a pair of coarsening marks
             if i + 1 < len(marks) and marks[i+1] == -1:
                 # Get the original elements we're coarsening
                 child1_elem = active[i]
@@ -326,47 +422,19 @@ def adapt_sol(q, coord, marks, active, label_mat, PS1, PS2, PG1, PG2, ngl):
                 child1_vals = q[i*ngl:(i+1)*ngl]
                 child2_vals = q[(i+1)*ngl:(i+2)*ngl]
                 
-                # Gather children solutions to parent using mesh-independent matrices
+                # Project using gather matrices (average/interpolate)
                 parent_vals = PG1 @ child1_vals + PG2 @ child2_vals
                 
                 # Add parent solution
                 new_q.extend(parent_vals)
-                
-                # Skip both coarsening marks
-                i += 2
+                i += 2 # Skip both children
             else:
-                # print(f"Warning: Unpaired coarsening mark at original element {active[i]}")
+                # Unpaired coarsening mark — copy as-is (shouldn't happen)
                 elem_vals = q[i*ngl:(i+1)*ngl]
                 new_q.extend(elem_vals)
                 i += 1
     
     result = np.array(new_q)
-    # print(f"\nFinal adapted solution shape: {result.shape}")
     return result
 
 
-
-# def enforce_balance(active, label_mat, cur_grid, info_mat, nop, cur_coords, PS1, PS2, PG1, PG2, ngl, xgl, qp):
-#     """
-#     Single step 2:1 Balance enforcement. This routine handles balance marking, mesh adapting, and solution adapting. THIS NEEDS TO BE CALLED IN A LOOP
-#     """
-    
-#     bal_marks = balance_mark(active, label_mat)
-#     pre_active = active  
-#     pre_grid = cur_grid
-#     pre_coord = cur_coords
-
-#     bal_grid, bal_active, ref_marks, bal_nelem, npoin_cg, bal_npoin_dg = adapt_mesh(nop, pre_grid, active, label_mat, info_mat, bal_marks)
-#     bal_coord, bal_intma, periodicity = create_grid_us(ngl, bal_nelem, npoin_cg, bal_npoin_dg, xgl, bal_grid)
-#     bal_q = adapt_sol(qp, pre_coord, bal_marks, pre_active, label_mat, PS1, PS2, PG1, PG2, ngl)
-
-#     # Update for next level
-#     # qp = bal_q
-#     # active = bal_active
-#     # nelem = bal_nelem
-#     # intma = bal_intma
-#     # coord = bal_coord
-#     # grid = bal_grid
-#     # npoin_dg = bal_npoin_dg
-
-#     return bal_q, bal_active, bal_nelem, bal_intma, bal_coord, bal_grid, bal_npoin_dg, periodicity

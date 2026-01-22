@@ -20,10 +20,10 @@ PROJECT_ROOT = os.path.abspath(os.path.join(
 sys.path.append(PROJECT_ROOT)
 
 
-# from numerical.solvers.dg_wave_solver_options import DGWaveSolver
-from numerical.solvers.dg_wave_solver_mixed_clean import DGWaveSolverMixed
-from numerical.environments.dg_amr_env_mixed import DGAMREnv
-# from numerical.environments.dg_amr_env_clean import DGAMREnv
+
+from numerical.solvers.dg_advection_solver import DGAdvectionSolver
+# from numerical.environments.dg_amr_env_mixed import DGAMREnv
+from numerical.environments.dg_amr_env import DGAMREnv
 from stable_baselines3 import A2C, PPO, DQN
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
@@ -209,7 +209,7 @@ def run_experiment(config_path, results_dir=None, force_cpu=False, use_timestamp
     
     # Initialize solver
     print("Initializing DG Wave Solver...")
-    solver = DGWaveSolverMixed(
+    solver = DGAdvectionSolver(
         nop=nop,
         xelem=initial_elements,
         max_elements=element_budget * 2,  # Buffer for exploration
