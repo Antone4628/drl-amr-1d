@@ -1,3 +1,60 @@
+"""Simple Callback for Monitoring DRL-AMR Training.
+
+This module provides the SimpleMonitorCallback class, a lightweight alternative
+to EnhancedMonitorCallback for monitoring RL training in the AMR environment.
+
+Purpose:
+    A minimal callback that tracks essential training metrics without the
+    overhead of PDF report generation. Useful for:
+    - Quick experiments where detailed reports aren't needed
+    - Reducing git overhead from generated files
+    - Faster training runs with less I/O
+
+Tracked Metrics:
+    - Action distribution over time (refine/coarsen/no-change)
+    - Episode rewards and lengths
+    - Termination reasons
+
+Output Files:
+    Minimal file creation compared to EnhancedMonitorCallback:
+    - metrics/episode_metrics.csv: Episode rewards and lengths
+    - metrics/action_distribution.csv: Action counts
+    - training_summary.txt: Text summary at end of training
+    - Model checkpoints at save_freq intervals
+
+Comparison with EnhancedMonitorCallback:
+    | Feature                    | Simple | Enhanced |
+    |----------------------------|--------|----------|
+    | Action tracking            | ✓      | ✓        |
+    | Episode rewards            | ✓      | ✓        |
+    | Resource usage tracking    | ✗      | ✓        |
+    | Do-nothing counter         | ✗      | ✓        |
+    | PPO metrics extraction     | ✗      | ✓        |
+    | PDF report generation      | ✗      | ✓        |
+    | JSON/CSV structured export | ✗      | ✓        |
+    | Parameter-based naming     | ✗      | ✓        |
+
+Usage:
+    Selected in run_experiments_mixed_gpu.py via callback_type parameter:
+    
+    >>> callback = SimpleMonitorCallback(
+    ...     total_timesteps=100000,
+    ...     log_dir="./results/experiment_001",
+    ...     save_freq=10000,
+    ...     verbose=0
+    ... )
+    >>> model.learn(total_timesteps=100000, callback=callback)
+
+Dependencies:
+    - stable_baselines3.common.callbacks.BaseCallback
+    - numpy, pandas
+    - collections.deque (for rolling windows)
+
+See Also:
+    - enhanced_callback_data.py: Full-featured callback with PDF reports
+    - run_experiments_mixed_gpu.py: Training script that selects callback type
+"""
+
 import os
 import numpy as np
 import pandas as pd
@@ -6,14 +63,72 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 
 class SimpleMonitorCallback(BaseCallback):
-    """
-    Simplified callback for monitoring RL training in adaptive mesh refinement.
+    """Simplified callback for monitoring RL training in adaptive mesh refinement.
     
-    Focuses only on tracking:
-    - Action distribution over time
-    - Episode rewards
+    A lightweight alternative to EnhancedMonitorCallback that focuses on
+    essential metrics without generating PDF reports or structured data exports.
+    Reduces file I/O overhead and git clutter from generated files.
     
-    Minimal file creation to reduce git overhead.
+    The callback integrates with SB3's training loop through inherited methods
+    and uses the model's logger for TensorBoard integration.
+    
+    Key Features:
+        - Action distribution tracking with rolling windows
+        - Episode reward and length tracking
+        - Termination reason statistics
+        - Periodic model checkpointing
+        - Simple text summary at training end
+        - Minimal file creation (2 CSVs + 1 text file)
+    
+    Attributes:
+        total_timesteps (int): Total training timesteps for progress calculation.
+        log_dir (str): Directory for saving outputs.
+        save_freq (int): Timestep interval for model checkpointing.
+        window_size (int): Window size for rolling statistics (recent_rewards, etc.).
+        log_freq (int): Timestep interval for console/TensorBoard logging.
+        action_mapping (Dict[int, int]): Maps SB3 discrete actions to semantic
+            actions: {0: -1 (coarsen), 1: 0 (no change), 2: 1 (refine)}.
+        action_names (Dict[int, str]): Human-readable action names.
+        metrics_dir (str): Subdirectory for CSV metric files.
+        
+        action_counts (Dict[int, int]): Cumulative count of each action type.
+        action_history (List[int]): All actions taken during training.
+        
+        episode_rewards (List[float]): Total reward for each completed episode.
+        current_episode_reward (float): Accumulated reward in current episode.
+        
+        episode_lengths (List[int]): Length (steps) of each completed episode.
+        termination_reasons (Dict[str, int]): Count of each termination reason.
+        episodes_completed (int): Number of episodes finished.
+        _episode_steps (int): Steps taken in current episode.
+        
+        recent_rewards (deque): Rolling window of recent step rewards.
+        recent_actions (deque): Rolling window of recent actions.
+        
+        current_episode_start_step (int): Timestep when current episode began.
+        current_episode_actions (Dict[int, int]): Action counts for current episode.
+    
+    Args:
+        total_timesteps: Total training timesteps for progress calculation.
+        log_dir: Directory path for saving outputs.
+        save_freq: Model checkpoint frequency in timesteps. Defaults to 10000.
+        verbose: Verbosity level (0=silent, 1=info, 2=debug). Defaults to 0.
+        window_size: Window size for rolling statistics. Defaults to 100.
+        action_mapping: Maps discrete action indices to semantic values.
+        log_freq: Console/TensorBoard logging frequency. Defaults to 1000.
+    
+    Example:
+        >>> callback = SimpleMonitorCallback(
+        ...     total_timesteps=100000,
+        ...     log_dir="./results/quick_test",
+        ...     save_freq=10000,
+        ...     verbose=1
+        ... )
+        >>> model.learn(total_timesteps=100000, callback=callback)
+        >>> # After training: check log_dir for:
+        >>> # - metrics/episode_metrics.csv
+        >>> # - metrics/action_distribution.csv
+        >>> # - training_summary.txt
     """
     
     def __init__(
@@ -55,7 +170,17 @@ class SimpleMonitorCallback(BaseCallback):
         self.reset_tracking()
         
     def reset_tracking(self):
-        """Reset core tracking metrics."""
+        """Reset all tracking metrics to initial state.
+        
+        Clears accumulated data and resets counters. Called during __init__
+        and could be called to reset mid-training if needed.
+        
+        Initializes:
+            - Action tracking: counts, history, rolling window
+            - Reward tracking: episode totals, current episode, rolling window
+            - Episode tracking: lengths, termination reasons, counters
+            - Per-episode state: start step, action counts
+        """
         # Action tracking
         self.action_counts = {action: 0 for action in self.action_mapping.values()}
         self.action_history = []
@@ -79,7 +204,16 @@ class SimpleMonitorCallback(BaseCallback):
         self.current_episode_actions = {action: 0 for action in self.action_mapping.values()}
         
     def _on_training_start(self) -> None:
-        """Called when training starts. Add configuration info to TensorBoard."""
+        """Called by SB3 when training begins.
+        
+        Logs initial configuration to TensorBoard including environment
+        parameters (element_budget, gamma_c) and hyperparameters
+        (entropy coefficient, learning rate).
+        
+        Note:
+            Uses try/except for environment parameters since they may
+            not be accessible depending on wrapper configuration.
+        """
         # Log configuration parameters
         if self.logger is not None:
             # Try to extract element budget and gamma_c from the environment
@@ -103,11 +237,22 @@ class SimpleMonitorCallback(BaseCallback):
                 self.logger.record("hyperparameters/learning_rate", self.model.learning_rate)
     
     def _on_step(self) -> bool:
-        """
-        Called after each step of the environment.
+        """Called by SB3 after each environment step.
+        
+        Main tracking hook that:
+        - Maps raw actions to semantic actions
+        - Updates action counters and rolling windows
+        - Accumulates episode rewards
+        - Detects episode completion
+        - Handles periodic logging and model saving
         
         Returns:
-            bool: Whether training should continue
+            bool: True to continue training, False to stop.
+            Returns False when num_timesteps >= total_timesteps.
+        
+        Note:
+            Unlike EnhancedMonitorCallback, this does not track resource
+            usage, do-nothing counter, or PPO training metrics.
         """
         # Extract current step information
         info = self.locals['infos'][0]
@@ -168,11 +313,20 @@ class SimpleMonitorCallback(BaseCallback):
         return True
     
     def _on_episode_end(self, info) -> None:
-        """
-        Called when an episode ends.
+        """Handle episode completion and log episode statistics.
+        
+        Updates episode-level tracking, logs to TensorBoard, and resets
+        per-episode state for the next episode.
         
         Args:
-            info: Information from the last step
+            info: Info dict from the final step of the episode.
+                Expected to contain 'reason' key with termination reason.
+        
+        Logs to TensorBoard:
+            - rollout/ep_rew_mean: Episode total reward
+            - rollout/ep_len_mean: Episode length
+            - actions/*_proportion: Action distribution for this episode
+            - termination/*: Termination reason indicator
         """
         # Calculate episode length
         episode_length = self.num_timesteps - self.current_episode_start_step
@@ -228,7 +382,19 @@ class SimpleMonitorCallback(BaseCallback):
         self.current_episode_reward = 0
     
     def _log_statistics(self) -> None:
-        """Log core training statistics."""
+        """Log training statistics to console and TensorBoard.
+        
+        Called periodically from _on_step based on log_freq setting.
+        Logs rolling window statistics for recent rewards and actions.
+        
+        Logs to TensorBoard:
+            - actions/*_proportion: Recent action distribution
+            - training/episodes_completed: Episode count
+            - training/recent_reward_mean: Mean of recent rewards
+            - rollout/ep_rew_mean: Mean of recent episode rewards
+            - rollout/ep_len_mean: Mean of recent episode lengths
+            - termination/*_pct: Termination reason percentages
+        """
         if not self.recent_rewards:
             return
             
@@ -278,7 +444,14 @@ class SimpleMonitorCallback(BaseCallback):
             self.logger.dump(self.num_timesteps)
     
     def _save_minimal_data(self) -> None:
-        """Save only essential data to CSV."""
+        """Save essential training data to CSV files.
+        
+        Creates two CSV files in the metrics subdirectory:
+        - episode_metrics.csv: Episode number, reward, length
+        - action_distribution.csv: Action name, count
+        
+        Called periodically at save_freq intervals and at training end.
+        """
         # Save episode rewards and lengths to a single CSV file
         episode_data = pd.DataFrame({
             'episode': range(1, len(self.episode_rewards) + 1),
@@ -297,7 +470,14 @@ class SimpleMonitorCallback(BaseCallback):
         action_data.to_csv(action_path, index=False)
     
     def on_training_end(self) -> None:
-        """Called when training ends."""
+        """Called by SB3 when training completes.
+        
+        Saves final data files and generates text summary report.
+        
+        Note:
+            This method has no underscore prefix because it's a public
+            SB3 callback hook that can be called externally.
+        """
         # Save final data
         self._save_minimal_data()
         
@@ -305,7 +485,17 @@ class SimpleMonitorCallback(BaseCallback):
         self._save_summary_report()
     
     def _save_summary_report(self) -> None:
-        """Save a simple text report with key statistics."""
+        """Save a text report with key training statistics.
+        
+        Creates training_summary.txt in log_dir with:
+        - Total training steps and episodes
+        - Reward statistics (mean, max, min, final 20%)
+        - Action distribution (counts and percentages)
+        - Termination reason breakdown
+        
+        Raises:
+            Prints error message on failure (doesn't raise).
+        """
         try:
             report_path = os.path.join(self.log_dir, "training_summary.txt")
             

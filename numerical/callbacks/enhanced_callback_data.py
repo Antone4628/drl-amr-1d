@@ -1,3 +1,69 @@
+"""Enhanced Callback for Monitoring DRL-AMR Training.
+
+This module provides the EnhancedMonitorCallback class, a Stable-Baselines3
+callback that monitors and records RL training progress for the Adaptive
+Mesh Refinement (AMR) environment.
+
+Purpose:
+    During training, the callback tracks:
+    - Action distribution over time (refine/coarsen/no-change)
+    - Episode rewards and lengths
+    - Resource usage (element count relative to budget)
+    - Termination reasons (budget exceeded, max steps, etc.)
+    - Do-nothing counter behavior (consecutive no-change actions)
+    - PPO training metrics (policy loss, value loss, entropy)
+
+    At training end, it generates:
+    - Structured data exports (JSON and CSV) for programmatic analysis
+    - Comprehensive PDF report with 7 pages of visualizations
+
+Output Files:
+    All files are named with training parameters for easy identification:
+    - `gamma_{X}_step_{Y}_rl_{Z}_budget_{W}_{N}k_training_metrics.json`
+    - `gamma_{X}_step_{Y}_rl_{Z}_budget_{W}_{N}k_training_summary.csv`
+    - `gamma_{X}_step_{Y}_rl_{Z}_budget_{W}_{N}k_training_report.pdf`
+
+PDF Report Pages:
+    1. Training Parameters - Configuration and runtime info
+    2. Convergence Metrics - Policy/value loss, entropy, reward trends
+    3. Action Distribution - How action selection evolves during training
+    4. Resource Usage - Element budget utilization over time
+    5. Episode Rewards - Per-episode reward with smoothed trend
+    6. Termination Reasons - Why episodes end (pie/bar charts)
+    7. Do-Nothing Analysis - Consecutive no-change action patterns
+
+Stable-Baselines3 Callback Lifecycle:
+    The callback hooks into SB3's training loop via these methods:
+    - _on_training_start(): Called once at beginning
+    - _on_step(): Called after every environment step
+    - _on_episode_end(): Called when done=True (internal, not SB3 hook)
+    - on_training_end(): Called once at end (note: no underscore prefix)
+
+    The _on_step() method must return True to continue training.
+
+Usage:
+    Called from run_experiments_mixed_gpu.py during training setup:
+    
+    >>> callback = EnhancedMonitorCallback(
+    ...     total_timesteps=100000,
+    ...     log_dir="./results/experiment_001",
+    ...     save_freq=10000,
+    ...     verbose=0
+    ... )
+    >>> model.learn(total_timesteps=100000, callback=callback)
+
+Dependencies:
+    - stable_baselines3.common.callbacks.BaseCallback
+    - numpy, pandas, matplotlib, seaborn
+    - yaml (for reading config.yaml)
+    - json (for structured data export)
+
+See Also:
+    - simple_monitor_callback.py: Lightweight alternative callback
+    - run_experiments_mixed_gpu.py: Training script that uses this callback
+    - dg_amr_env.py: Environment that provides info dict values
+"""
+
 import os
 import json
 import numpy as np
@@ -13,13 +79,79 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 
 class EnhancedMonitorCallback(BaseCallback):
-    """
-    Enhanced callback for monitoring RL training in adaptive mesh refinement.
+    """Enhanced callback for monitoring RL training in adaptive mesh refinement.
     
-    NOW INCLUDES:
-    - Parameter-based file naming
-    - Structured data export (JSON/CSV) for analysis
-    - All previous PDF functionality
+    Extends Stable-Baselines3's BaseCallback to provide comprehensive training
+    monitoring specifically designed for the DRL-AMR environment. Tracks all
+    relevant metrics during training and generates detailed reports at completion.
+    
+    The callback integrates with SB3's training loop through inherited methods
+    (_on_training_start, _on_step, on_training_end) and uses the model's logger
+    for TensorBoard integration.
+    
+    Key Features:
+        - Parameter-based file naming for easy experiment identification
+        - Structured data export (JSON/CSV) for downstream analysis
+        - Multi-page PDF report with training visualizations
+        - TensorBoard logging at configurable frequency
+        - Periodic model checkpointing
+    
+    Attributes:
+        total_timesteps (int): Total training timesteps (for progress calculation).
+        log_dir (str): Directory for saving outputs (models, reports, data).
+        save_freq (int): Timestep interval for model checkpointing.
+        window_size (int): Window size for rolling statistics (unused currently).
+        log_freq (int): Timestep interval for TensorBoard logging.
+        action_mapping (Dict[int, int]): Maps SB3 discrete actions to semantic
+            actions: {0: -1 (coarsen), 1: 0 (no change), 2: 1 (refine)}.
+        action_names (Dict[int, str]): Human-readable action names.
+        
+        training_start_time (float or None): Unix timestamp when training started.
+        training_end_time (float or None): Unix timestamp when training ended.
+        
+        action_history (List[Tuple[int, int]]): (timestep, mapped_action) pairs.
+        action_counts (Dict[int, int]): Cumulative count of each action type.
+        
+        episode_rewards (List[float]): Total reward for each completed episode.
+        episode_lengths (List[int]): Length (steps) of each completed episode.
+        episodes_completed (int): Number of episodes finished so far.
+        termination_reasons (defaultdict): Count of each termination reason.
+        
+        resource_history (List[Tuple[int, float]]): (timestep, resource_usage) pairs.
+        
+        do_nothing_history (List[Tuple[int, int]]): (timestep, counter_value) pairs.
+        max_do_nothing_per_episode (List[int]): Peak do-nothing counter each episode.
+        current_episode_max_do_nothing (int): Running max for current episode.
+        
+        training_metrics (Dict[str, List]): PPO training metrics from model logger.
+        
+        current_episode_start_step (int): Timestep when current episode began.
+        current_episode_reward (float): Accumulated reward in current episode.
+        _episode_steps (int): Steps taken in current episode.
+    
+    Args:
+        total_timesteps: Total training timesteps for progress calculation.
+        log_dir: Directory path for saving all outputs.
+        save_freq: Model checkpoint frequency in timesteps. Defaults to 10000.
+        verbose: Verbosity level (0=silent, 1=info, 2=debug). Defaults to 0.
+        window_size: Window size for rolling statistics. Defaults to 100.
+        action_mapping: Maps discrete action indices to semantic values.
+        log_freq: TensorBoard logging frequency in timesteps. Defaults to 2000.
+    
+    Example:
+        >>> callback = EnhancedMonitorCallback(
+        ...     total_timesteps=100000,
+        ...     log_dir="./results/my_experiment",
+        ...     save_freq=10000,
+        ...     verbose=1
+        ... )
+        >>> model.learn(total_timesteps=100000, callback=callback)
+        >>> # After training: check log_dir for PDF report and JSON/CSV data
+    
+    Note:
+        The callback reads config.yaml from log_dir to extract experiment
+        parameters for file naming. This file should be saved by the training
+        script before training starts.
     """
     
     def __init__(
@@ -32,6 +164,21 @@ class EnhancedMonitorCallback(BaseCallback):
         action_mapping: Dict[int, int] = {0: -1, 1: 0, 2: 1},
         log_freq: int = 2000
     ):
+        """Initialize the enhanced monitoring callback.
+        
+        Sets up all tracking data structures and stores configuration.
+        The actual tracking begins when _on_training_start() is called
+        by the SB3 training loop.
+        
+        Args:
+            total_timesteps: Total training timesteps for progress reporting.
+            log_dir: Directory for saving outputs (must exist).
+            save_freq: Model checkpoint frequency in timesteps.
+            verbose: Verbosity level (0=silent, 1=info, 2=debug).
+            window_size: Window size for rolling statistics.
+            action_mapping: Maps SB3 action indices to semantic values.
+            log_freq: TensorBoard logging frequency in timesteps.
+        """
         super().__init__(verbose)
         self.total_timesteps = total_timesteps
         self.log_dir = log_dir
@@ -49,7 +196,19 @@ class EnhancedMonitorCallback(BaseCallback):
         self.reset_tracking()
         
     def reset_tracking(self):
-        """Reset all tracking metrics to minimal essential set."""
+        """Reset all tracking metrics to initial state.
+        
+        Clears all accumulated data and resets counters. Called during
+        __init__ and could be called to reset mid-training if needed.
+        
+        This method initializes:
+            - Action tracking: history list and cumulative counts
+            - Episode tracking: rewards, lengths, termination reasons
+            - Resource tracking: usage history over timesteps
+            - Do-nothing tracking: counter history and per-episode peaks
+            - Training metrics: PPO loss and entropy values
+            - Current episode state: start step, reward accumulator
+        """
         # Action tracking for final distribution plot
         self.action_history = []  # Store (timestep, action) pairs for final plot
         self.action_counts = {action: 0 for action in self.action_mapping.values()}
@@ -83,7 +242,19 @@ class EnhancedMonitorCallback(BaseCallback):
         self._episode_steps = 0
 
     def _extract_parameters_from_config(self) -> Dict[str, Any]:
-        """Extract key parameters for file naming and analysis."""
+        """Extract key parameters from config file for file naming.
+        
+        Attempts to load config.yaml from log_dir and extract the four
+        key sweep parameters. Falls back to querying the environment
+        directly if config file is unavailable.
+        
+        Returns:
+            Dict containing parameter values (or 'unknown' if not found):
+                - gamma_c: Reward scaling factor for resource penalty
+                - step_domain_fraction: Wave propagation step size
+                - rl_iterations_per_timestep: Adaptation frequency
+                - element_budget: Maximum allowed elements
+        """
         params = {}
         
         # Try to load config file from log directory
@@ -115,7 +286,21 @@ class EnhancedMonitorCallback(BaseCallback):
         return params
 
     def _generate_parameter_based_filename(self, base_name: str, extension: str) -> str:
-        """Generate filename with parameter information."""
+        """Generate a filename that encodes experiment parameters.
+        
+        Creates descriptive filenames like:
+        "gamma_25_step_0.05_rl_10_budget_25_100k_training_report.pdf"
+        
+        This makes it easy to identify experiment configurations from
+        filenames when browsing results directories.
+        
+        Args:
+            base_name: Core filename without extension (e.g., "training_report").
+            extension: File extension without dot (e.g., "pdf", "json").
+        
+        Returns:
+            Complete filename string with parameters encoded.
+        """
         params = self._extract_parameters_from_config()
         
         # Create parameter string
@@ -137,7 +322,23 @@ class EnhancedMonitorCallback(BaseCallback):
         return f"{param_string}_{timesteps_k}k_{base_name}.{extension}"
 
     def _create_analysis_metrics(self) -> Dict[str, Any]:
-        """Create structured metrics for analysis."""
+        """Create comprehensive metrics dictionary for JSON export.
+        
+        Compiles all tracked data into a structured dictionary suitable
+        for programmatic analysis. Includes both summary statistics and
+        raw data arrays.
+        
+        Returns:
+            Dict containing:
+                - Experiment parameters (gamma_c, step_domain_fraction, etc.)
+                - Training info (timesteps, episodes, duration)
+                - Performance metrics (final reward mean/std, convergence score)
+                - Termination analysis (percentages by reason)
+                - Resource usage statistics
+                - Do-nothing counter statistics
+                - Action distribution
+                - Raw episode rewards array
+        """
         params = self._extract_parameters_from_config()
         
         # Calculate final convergence metrics
@@ -211,7 +412,20 @@ class EnhancedMonitorCallback(BaseCallback):
         return metrics
 
     def _calculate_convergence_score(self) -> float:
-        """Calculate a convergence score based on reward stability."""
+        """Calculate a convergence score based on reward stability.
+        
+        Assesses training convergence by examining the final portion of
+        episode rewards. Combines trend (is reward still improving?) with
+        stability (is reward consistent?).
+        
+        Returns:
+            Float between 0 and 1 where:
+                - 0 = poor convergence (unstable, degrading)
+                - 1 = excellent convergence (stable, improving or flat)
+        
+        Note:
+            Returns 0.0 if fewer than 20 episodes completed (insufficient data).
+        """
         if len(self.episode_rewards) < 20:
             return 0.0
             
@@ -232,7 +446,17 @@ class EnhancedMonitorCallback(BaseCallback):
         return convergence_score
 
     def _save_structured_data(self):
-        """Save analysis-ready structured data."""
+        """Save analysis-ready structured data as JSON and CSV.
+        
+        Exports training metrics in two formats:
+        1. JSON: Complete metrics including nested dicts and arrays
+        2. CSV: Flattened single-row summary for easy aggregation
+        
+        Files are named with experiment parameters for identification.
+        
+        Raises:
+            Prints error message and traceback on failure (doesn't raise).
+        """
         try:
             metrics = self._create_analysis_metrics()
             
@@ -269,11 +493,17 @@ class EnhancedMonitorCallback(BaseCallback):
             import traceback
             traceback.print_exc()
 
-    # [Include all the existing methods from the original callback here]
-    # _on_training_start, _get_env_param, _on_step, _on_episode_end, _log_to_tensorboard, etc.
     
     def _on_training_start(self) -> None:
-        """Called when training starts."""
+        """Called by SB3 when training begins.
+        
+        Records training start time and logs initial environment
+        configuration to TensorBoard.
+        
+        Note:
+            This is an SB3 callback hook (underscore prefix indicates
+            it's called internally by the training loop).
+        """
         self.training_start_time = time.time()
         
         # Log basic environment configuration to TensorBoard
@@ -296,7 +526,17 @@ class EnhancedMonitorCallback(BaseCallback):
                     print(f"Warning: Could not log environment parameters: {e}")
     
     def _get_env_param(self, param_name):
-        """Safely extract environment parameter."""
+        """Safely extract a parameter from the wrapped environment.
+        
+        SB3 wraps environments in multiple layers (Monitor, VecEnv, etc.).
+        This method tries several access patterns to find the parameter.
+        
+        Args:
+            param_name: Name of the parameter to retrieve.
+        
+        Returns:
+            Parameter value if found, None otherwise.
+        """
         try:
             return getattr(self.model.env.unwrapped, param_name)
         except (AttributeError, KeyError):
@@ -309,7 +549,23 @@ class EnhancedMonitorCallback(BaseCallback):
                     return None
     
     def _on_step(self) -> bool:
-        """Called after each step of the environment."""
+        """Called by SB3 after each environment step.
+        
+        This is the main tracking hook. Extracts information from the
+        current step, updates all tracking data structures, and handles
+        periodic logging and model saving.
+        
+        Returns:
+            True to continue training, False to stop early.
+            Always returns True (no early stopping implemented).
+        
+        Note:
+            Accesses self.locals which is populated by SB3 with:
+            - infos: List of info dicts from environment
+            - actions: Array of actions taken
+            - rewards: Array of rewards received
+            - dones: Array of done flags
+        """
         # Extract current step information
         info = self.locals['infos'][0]
         action = self.locals['actions'][0]
@@ -408,7 +664,19 @@ class EnhancedMonitorCallback(BaseCallback):
         return True
     
     def _on_episode_end(self, info: Dict[str, Any]) -> None:
-        """Called when an episode ends."""
+        """Handle episode completion and update episode-level statistics.
+        
+        Called internally by _on_step when done=True. Updates all
+        episode-level tracking and resets per-episode state.
+        
+        Args:
+            info: Info dict from the final step of the episode.
+                Expected to contain 'reason' key with termination reason.
+        
+        Note:
+            This is NOT an SB3 callback hook - it's called internally
+            from _on_step when an episode ends.
+        """
         # Calculate episode length
         episode_length = self.num_timesteps - self.current_episode_start_step
         
@@ -432,7 +700,15 @@ class EnhancedMonitorCallback(BaseCallback):
         self.current_episode_reward = 0
     
     def _log_to_tensorboard(self) -> None:
-        """Log essential metrics to TensorBoard at reduced frequency."""
+        """Log essential metrics to TensorBoard at reduced frequency.
+        
+        Logs action distribution, resource usage, and episode statistics.
+        Called periodically from _on_step based on log_freq setting.
+        
+        Note:
+            Uses self.logger which is inherited from BaseCallback and
+            connected to the model's TensorBoard logger.
+        """
         if self.logger is None:
             return
             
@@ -472,7 +748,15 @@ class EnhancedMonitorCallback(BaseCallback):
         self.logger.dump(self.num_timesteps)
 
     def on_training_end(self) -> None:
-        """Called when training ends - now with structured data export!"""
+        """Called by SB3 when training completes.
+        
+        Records training end time and generates all output files:
+        structured data (JSON/CSV) and PDF report.
+        
+        Note:
+            This method has no underscore prefix because it's a public
+            SB3 callback hook that can be called externally.
+        """
         self.training_end_time = time.time()
         
         # Generate structured data FIRST
@@ -487,7 +771,23 @@ class EnhancedMonitorCallback(BaseCallback):
             print(f"Structured data and PDF report saved with parameter-based naming")
 
     def _create_final_report(self):
-        """Create comprehensive final report PDF with parameter-based naming."""
+        """Create comprehensive multi-page PDF training report.
+        
+        Generates a 7-page PDF with visualizations of all tracked metrics.
+        Uses parameter-based filename for easy identification.
+        
+        Report Pages:
+            1. Training Parameters - Configuration and runtime info
+            2. Convergence Metrics - PPO losses and reward trends
+            3. Action Distribution - Action selection over training
+            4. Resource Usage - Element budget utilization
+            5. Episode Rewards - Per-episode reward curve
+            6. Termination Reasons - Why episodes ended
+            7. Do-Nothing Analysis - Consecutive no-change patterns
+        
+        Raises:
+            Prints error message and traceback on failure (doesn't raise).
+        """
         # Generate parameter-based filename
         pdf_filename = self._generate_parameter_based_filename("training_report", "pdf")
         report_path = os.path.join(self.log_dir, pdf_filename)
@@ -523,11 +823,19 @@ class EnhancedMonitorCallback(BaseCallback):
             import traceback
             traceback.print_exc()
 
-    # [All the existing plotting methods remain the same - _create_parameters_page, etc.]
-    # I'll include the key ones but you can keep all the existing plotting code
-    
     def _get_training_parameters(self):
-        """Extract comprehensive training parameters from config and model."""
+        """Extract comprehensive training parameters for PDF report.
+        
+        Gathers parameters from multiple sources:
+        - config.yaml file (complete experiment configuration)
+        - Model attributes (learning rate, entropy coef, n_steps)
+        - Environment attributes (budget, gamma_c, max_steps)
+        - Runtime statistics (duration, episodes completed)
+        
+        Returns:
+            Dict with keys: 'config', 'environment', 'runtime',
+            plus any extracted model parameters.
+        """
         params = {}
         
         # Try to load config file from log directory
@@ -574,7 +882,14 @@ class EnhancedMonitorCallback(BaseCallback):
         return params
 
     def _create_parameters_page(self, pdf):
-        """Create comprehensive training parameters page."""
+        """Create PDF page displaying training parameters and configuration.
+        
+        Shows a text-based summary of all experiment configuration
+        including runtime info, environment settings, and model parameters.
+        
+        Args:
+            pdf: PdfPages object to save the figure to.
+        """
         plt.figure(figsize=(10, 12))
         plt.axis('off')
         
@@ -654,7 +969,14 @@ class EnhancedMonitorCallback(BaseCallback):
 
 
     def _create_action_distribution_page(self, pdf):
-        """Create action distribution over time page."""
+        """Create PDF page showing action distribution over training.
+        
+        Plots the proportion of each action type (refine/coarsen/no-change)
+        as a function of training timesteps using a sliding window.
+        
+        Args:
+            pdf: PdfPages object to save the figure to.
+        """
         plt.figure(figsize=(12, 8))
         
         if len(self.action_history) > 0:
@@ -699,7 +1021,14 @@ class EnhancedMonitorCallback(BaseCallback):
         plt.close()
     
     def _create_resource_usage_page(self, pdf):
-        """Create resource usage over time page."""
+        """Create PDF page showing resource usage over training.
+        
+        Plots element count as fraction of budget over timesteps.
+        Includes reference line at 100% budget limit.
+        
+        Args:
+            pdf: PdfPages object to save the figure to.
+        """
         plt.figure(figsize=(12, 6))
         
         if len(self.resource_history) > 0:
@@ -733,7 +1062,13 @@ class EnhancedMonitorCallback(BaseCallback):
         plt.close()
     
     def _create_episode_rewards_page(self, pdf):
-        """Create episode rewards over time page."""
+        """Create PDF page showing episode rewards over training.
+        
+        Plots individual episode rewards with smoothed trend line.
+        
+        Args:
+            pdf: PdfPages object to save the figure to.
+        """
         plt.figure(figsize=(12, 6))
         
         if self.episode_rewards:
@@ -762,7 +1097,14 @@ class EnhancedMonitorCallback(BaseCallback):
         plt.close()
     
     def _create_termination_page(self, pdf):
-        """Create termination reasons analysis page."""
+        """Create PDF page analyzing episode termination reasons.
+        
+        Shows both bar chart and pie chart of termination reason
+        distribution.
+        
+        Args:
+            pdf: PdfPages object to save the figure to.
+        """
         plt.figure(figsize=(12, 8))
         
         if self.termination_reasons:
@@ -801,7 +1143,20 @@ class EnhancedMonitorCallback(BaseCallback):
         plt.close()
         
     def _create_do_nothing_analysis_page(self, pdf):
-        """Create do-nothing counter analysis page."""
+        """Create PDF page analyzing do-nothing counter behavior.
+        
+        The do-nothing counter tracks consecutive "no change" actions.
+        High values may indicate the agent is stuck or the mesh is optimal.
+        
+        Shows 4 subplots:
+        1. Counter over timesteps
+        2. Peak counter per episode
+        3. Distribution of peak values
+        4. Summary statistics
+        
+        Args:
+            pdf: PdfPages object to save the figure to.
+        """
         plt.figure(figsize=(12, 10))
         
         # Plot 1: Do-nothing counter over time
@@ -866,87 +1221,21 @@ class EnhancedMonitorCallback(BaseCallback):
         pdf.savefig(bbox_inches='tight')
         plt.close()
 
-    def _create_parameters_page(self, pdf):
-        """Create comprehensive training parameters page."""
-        plt.figure(figsize=(10, 12))
-        plt.axis('off')
-        
-        params = self._get_training_parameters()
-        
-        # Build parameter text
-        param_text = ["# Adaptive Mesh Refinement RL Training Parameters\n"]
-        
-        # Runtime information
-        if 'runtime' in params:
-            runtime = params['runtime']
-            param_text.extend([
-                "## Runtime Information",
-                f"Total Timesteps: {runtime.get('total_timesteps', 'N/A'):,}",
-                f"Episodes Completed: {runtime.get('episodes_completed', 'N/A'):,}",
-                f"Training Duration: {runtime.get('training_duration_hours', 0):.2f} hours ({runtime.get('training_duration_minutes', 0):.1f} minutes)",
-                ""
-            ])
-        
-        # Environment parameters
-        if 'environment' in params:
-            param_text.append("## Environment Parameters")
-            for key, value in params['environment'].items():
-                param_text.append(f"{key}: {value}")
-            param_text.append("")
-        
-        # Full config file contents
-        if 'config' in params:
-            config = params['config']
-            param_text.append("## Complete Configuration")
-            
-            # Environment section
-            if 'environment' in config:
-                param_text.append("### Environment:")
-                for key, value in config['environment'].items():
-                    param_text.append(f"  {key}: {value}")
-                param_text.append("")
-            
-            # Training section
-            if 'training' in config:
-                param_text.append("### Training:")
-                for key, value in config['training'].items():
-                    param_text.append(f"  {key}: {value}")
-                param_text.append("")
-            
-            # Solver section
-            if 'solver' in config:
-                param_text.append("### Solver:")
-                for key, value in config['solver'].items():
-                    if isinstance(value, list):
-                        param_text.append(f"  {key}: {value}")
-                    else:
-                        param_text.append(f"  {key}: {value}")
-                param_text.append("")
-        
-        # Model parameters
-        param_text.append("## Model Parameters")
-        for key, value in params.items():
-            if key not in ['config', 'environment', 'runtime']:
-                param_text.append(f"{key}: {value}")
-        
-        # Add timestamp
-        import datetime
-        param_text.extend([
-            "",
-            f"Report generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        ])
-        
-        # Create text display
-        plt.text(0.05, 0.95, '\n'.join(param_text), transform=plt.gca().transAxes, 
-                fontsize=10, verticalalignment='top', family='monospace',
-                bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.1))
-        
-        plt.title("Training Configuration and Parameters", fontsize=16, fontweight='bold', pad=20)
-        pdf.savefig(bbox_inches='tight')
-        plt.close()
     
     def _create_convergence_page(self, pdf):
-        """Create training convergence metrics page."""
+        """Create PDF page showing training convergence metrics.
+        
+        Displays PPO training metrics if available:
+        - Policy loss
+        - Value loss
+        - Episode reward mean
+        - Entropy
+        
+        Falls back to episode rewards plot if PPO metrics unavailable.
+        
+        Args:
+            pdf: PdfPages object to save the figure to.
+        """
         plt.figure(figsize=(12, 10))
         
         # Check if we have training metrics
@@ -999,6 +1288,3 @@ class EnhancedMonitorCallback(BaseCallback):
         pdf.savefig(bbox_inches='tight')
         plt.close()
 
-    # [Include all other existing plotting methods from your original callback]
-    # _create_convergence_page, _create_action_distribution_page, etc.
-    # These remain unchanged from your original implementation
