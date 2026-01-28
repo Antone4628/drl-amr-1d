@@ -1,7 +1,32 @@
 #!/usr/bin/env python3
-"""
-Evaluate a single model by index for parallel batch processing.
-Usage: python evaluate_single_model_by_index.py <index> <sweep_name> <initial_refinement> <element_budget>
+"""SLURM array job entry point for parallel model evaluation.
+
+This script evaluates a single trained RL model identified by array index,
+enabling parallel batch processing of all 81 models in a sweep. Designed
+to be called from SLURM job arrays where each task evaluates one model.
+
+Usage:
+    python evaluate_single_model_by_index.py <index> <sweep_name> <initial_refinement> <element_budget> <max_level> <icase>
+
+Args:
+    index: 1-based model index (SLURM_ARRAY_TASK_ID)
+    sweep_name: Name of the sweep directory containing models
+    initial_refinement: Initial uniform refinement level (0-6 typically)
+    element_budget: Maximum elements allowed during evaluation
+    max_level: Maximum refinement level for AMR
+    icase: Test case identifier for initial condition
+
+Example SLURM submission:
+    #SBATCH --array=1-81
+    python evaluate_single_model_by_index.py $SLURM_ARRAY_TASK_ID session4_100k_uniform 4 80 5 1
+
+Output:
+    - JSON file: {model_dir}_ref_{initial_refinement}_budget_{element_budget}_results.json
+    - CSV row appended to: model_results_ref{initial_refinement}_budget{element_budget}_max{max_level}.csv
+
+See Also:
+    single_model_runner: Core evaluation logic called by this script.
+    comprehensive_analyzer: Stage 1 analysis that consumes the CSV output.
 """
 
 import sys
@@ -18,6 +43,18 @@ sys.path.append(PROJECT_ROOT)
 from single_model_runner import run_single_model, extract_training_parameters
 
 def main():
+    """Parse arguments and run single model evaluation.
+    
+    Parses command line arguments, locates the model by index in the sweep
+    directory, runs evaluation with specified configuration, and saves results
+    to both JSON (detailed) and CSV (aggregated) formats.
+    
+    The CSV output uses file locking (fcntl) for thread-safe concurrent writes
+    from multiple SLURM array tasks.
+    
+    Raises:
+        SystemExit: If wrong number of arguments or index out of range.
+    """
     if len(sys.argv) != 7:  # Changed from 6 to 7
         print("Usage: python evaluate_single_model_by_index.py <index> <sweep_name> <initial_refinement> <element_budget> <max_level> <icase>")
         sys.exit(1)

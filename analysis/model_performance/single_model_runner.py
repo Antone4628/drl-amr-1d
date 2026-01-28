@@ -1,21 +1,37 @@
-"""
-Single Model Runner for Evaluation - Enhanced Version
+"""Single Model Runner for Evaluation.
 
-This script evaluates a single trained RL model on the 1D wave equation using 
+This module evaluates a single trained RL model on the 1D wave equation using
 Discontinuous Galerkin method with sequential adaptive mesh refinement.
 
-Key features for model evaluation:
-- Uses projected solutions only (no steady-state solves)
-- Normal timestepping without domain fraction jumps
-- Multiple plotting modes: animate, snapshot, final
-- Optional exact solution comparison
-- Comprehensive metrics collection for accuracy vs cost analysis
-- Enhanced parameter extraction and display
+Key Features:
+    - Uses projected solutions only (no steady-state solves)
+    - Normal timestepping without domain fraction jumps
+    - Multiple plotting modes: animate, snapshot, final
+    - Optional exact solution comparison
+    - Comprehensive metrics collection for accuracy vs cost analysis
+    - Enhanced parameter extraction and display
+
+Workflow:
+    1. Load trained model from standardized path structure
+    2. Initialize evaluation solver and model adapter
+    3. Run simulation with RL-based mesh adaptation at each timestep
+    4. Collect metrics: L2 error, grid-normalized error, total cost
+    5. Generate visualizations (animation, snapshots, or final plot)
 
 Usage:
-    python single_model_runner.py --model-path path/to/model.zip --plot-mode animate --include-exact
-    python single_model_runner.py --model-path path/to/model.zip --plot-mode snapshot --time-final 1.0
-    python single_model_runner.py --model-path path/to/model.zip --plot-mode final --time-final 0.5
+    Command line:
+        python single_model_runner.py --model-path path/to/model.zip --plot-mode animate --include-exact
+        python single_model_runner.py --model-path path/to/model.zip --plot-mode snapshot --time-final 1.0
+        python single_model_runner.py --model-path path/to/model.zip --plot-mode final --time-final 0.5
+
+    Programmatic:
+        from single_model_runner import run_single_model
+        results = run_single_model(model_path='path/to/model.zip', time_final=1.0)
+
+See Also:
+    dg_wave_solver_evaluation: Evaluation-specific solver wrapper.
+    model_marker_evaluation: Marker-based adaptation for evaluation.
+    comprehensive_analyzer: Stage 1 analysis that consumes these results.
 """
 
 import numpy as np
@@ -35,21 +51,36 @@ PROJECT_ROOT = os.path.abspath(os.path.join(
 sys.path.append(PROJECT_ROOT)
 
 # Import the evaluation solver and adapter
-from dg_wave_solver_evaluation import DGWaveSolverEvaluation
-from model_marker_evaluation import ModelMarkerEvaluation
+from analysis.model_performance.dg_wave_solver_evaluation import DGWaveSolverEvaluation
+from analysis.model_performance.model_marker_evaluation import ModelMarkerEvaluation
 from numerical.solvers.utils import exact_solution, calculate_grid_normalized_l2_error
 
 def extract_training_parameters(model_path):
-    """
-    Extract training parameters from the standardized model path.
+    """Extract training parameters from the standardized model path.
     
-    Expected path format: .../gamma_{value}_step_{value}_rl_{value}_budget_{value}/final_model.zip
+    Parses the parent directory name to extract hyperparameters used during
+    training. The path follows a standardized naming convention from the
+    training pipeline.
     
     Args:
-        model_path (str): Path to the model file
+        model_path: Path to the model file. Expected format:
+            .../gamma_{value}_step_{value}_rl_{value}_budget_{value}/final_model.zip
         
     Returns:
-        dict: Extracted training parameters or None if parsing fails
+        dict or None: Extracted training parameters with keys:
+            - gamma_c (float): Reward scaling factor
+            - step_domain_fraction (float): Wave propagation step size
+            - rl_iterations_per_timestep (int): Adaptation frequency
+            - element_budget (int): Resource constraint
+        Returns None if parsing fails.
+    
+    Example:
+        >>> params = extract_training_parameters(
+        ...     '/path/to/gamma_50.0_step_0.05_rl_25_budget_30/final_model.zip'
+        ... )
+        >>> print(params)
+        {'gamma_c': 50.0, 'step_domain_fraction': 0.05, 
+         'rl_iterations_per_timestep': 25, 'element_budget': 30}
     """
     try:
         # Extract the parent directory name
@@ -75,15 +106,25 @@ def extract_training_parameters(model_path):
         return None
 
 def create_model_directory(model_path, base_dir=None):
-    """
-    Create organized directory structure for model outputs.
+    """Create organized directory structure for model outputs.
+    
+    Creates a model-specific subdirectory within the base output directory
+    for storing evaluation artifacts (plots, animations, results).
     
     Args:
-        model_path (str): Path to model file
-        base_dir (str): Base directory (defaults to PROJECT_ROOT/animations)
+        model_path: Path to model file. The parent directory name is used
+            as the subdirectory name.
+        base_dir: Base directory for outputs. Defaults to PROJECT_ROOT/animations.
         
     Returns:
-        str: Path to model-specific directory
+        str: Path to the created model-specific directory.
+    
+    Example:
+        >>> output_dir = create_model_directory(
+        ...     '/models/gamma_50_step_0.05_rl_25_budget_30/final_model.zip'
+        ... )
+        >>> print(output_dir)
+        '/project/animations/gamma_50_step_0.05_rl_25_budget_30'
     """
     if base_dir is None:
         base_dir = os.path.join(PROJECT_ROOT, 'animations')
@@ -98,17 +139,32 @@ def create_model_directory(model_path, base_dir=None):
     return model_output_dir
 
 def generate_filename(model_path, training_params, plot_mode, extension='png'):
-    """
-    Generate descriptive filename with parameters and mode.
+    """Generate descriptive filename with parameters and mode.
+    
+    Creates a filename that encodes the model name, training parameters,
+    and visualization mode for easy identification of output files.
     
     Args:
-        model_path (str): Path to model file
-        training_params (dict): Extracted training parameters
-        plot_mode (str): Plotting mode (animate, snapshot, final)
-        extension (str): File extension
+        model_path: Path to model file. The stem (filename without extension)
+            is used as the base name.
+        training_params: Extracted training parameters dict, or None.
+        plot_mode: Plotting mode string ('animate', 'snapshot', 'final').
+        extension: File extension without dot. Defaults to 'png'.
         
     Returns:
-        str: Generated filename
+        str: Generated filename with format:
+            {model_name}_g{gamma}_s{step}_r{rl}_b{budget}_{mode}.{ext}
+            or {model_name}_{mode}.{ext} if params is None.
+    
+    Example:
+        >>> filename = generate_filename(
+        ...     '/path/to/final_model.zip',
+        ...     {'gamma_c': 50, 'step_domain_fraction': 0.05,
+        ...      'rl_iterations_per_timestep': 25, 'element_budget': 30},
+        ...     'snapshot'
+        ... )
+        >>> print(filename)
+        'final_model_g50_s0.05_r25_b30_snapshot.png'
     """
     model_name = Path(model_path).stem
     
@@ -121,14 +177,56 @@ def generate_filename(model_path, training_params, plot_mode, extension='png'):
     return filename
 
 def create_parameter_title(training_params):
-    """Create formatted parameter string for titles with LaTeX support."""
+    """Create formatted parameter string for plot titles with LaTeX support.
+    
+    Generates a human-readable title string showing the training hyperparameters.
+    Uses LaTeX formatting for Greek letters when rendered in matplotlib.
+    
+    Args:
+        training_params: Dictionary with training parameters, or None.
+            Expected keys: gamma_c, step_domain_fraction,
+            rl_iterations_per_timestep, element_budget.
+    
+    Returns:
+        str: Formatted title string. Returns "Training Parameters: Unknown"
+            if training_params is None.
+    
+    Example:
+        >>> title = create_parameter_title({'gamma_c': 50, 
+        ...     'step_domain_fraction': 0.05, 'rl_iterations_per_timestep': 25,
+        ...     'element_budget': 30})
+        >>> # Returns: "Training Parameters: $\\gamma_c$=50, step=0.05, rl_iter=25, budget=30"
+    """
     if training_params:
         return f"Training Parameters: $\\gamma_c$={training_params['gamma_c']}, step={training_params['step_domain_fraction']}, rl_iter={training_params['rl_iterations_per_timestep']}, budget={training_params['element_budget']}"
     else:
         return "Training Parameters: Unknown"
 
 def create_simulation_config_title(solver, initial_refinement=None, element_budget=None):
-    """Create formatted simulation configuration string for titles."""
+    """Create formatted simulation configuration string for plot titles.
+    
+    Generates a human-readable title string showing the evaluation configuration
+    parameters (distinct from training parameters).
+    
+    Args:
+        solver: Solver instance with configuration attributes (initial_refinement,
+            element_budget, max_level).
+        initial_refinement: Initial refinement level override. If None, attempts
+            to read from solver.initial_refinement.
+        element_budget: Element budget override. If None, attempts to read
+            from solver.element_budget.
+    
+    Returns:
+        str: Formatted configuration string showing initial refinement level,
+            element budget, and max refinement level. Returns error message
+            if attributes cannot be accessed.
+    
+    Example:
+        >>> title = create_simulation_config_title(solver, 
+        ...     initial_refinement=4, element_budget=80)
+        >>> # Returns: "Simulation Configuration: initial refinement level: 4, 
+        >>> #          element budget: 80, max refinement level: 5"
+    """
     try:
         # Use passed parameters if available, otherwise try to get from solver
         initial_ref = initial_refinement if initial_refinement is not None else (
@@ -146,26 +244,37 @@ def create_simulation_config_title(solver, initial_refinement=None, element_budg
 def create_animation(times, solutions, grids, coords, solver, training_params, 
                     include_exact=True, output_dir=None, model_path=None, 
                     initial_refinement=None, element_budget=None):
-    """
-    Create and save animation of the simulation results.
+    """Create and save animation of the simulation results.
+    
+    Generates an MP4 animation showing the evolution of the numerical solution
+    over time, with optional exact solution comparison and element boundary
+    visualization.
     
     Args:
-        times (list): Time history
-        solutions (list): Solution history  
-        grids (list): Grid boundary history
-        coords (list): Coordinate history
-        solver: Solver instance for parameters
-        training_params (dict): Training parameter information
-        include_exact (bool): Whether to include exact solution
-        output_dir (str): Directory to save animation
-        model_path (str): Path to model file
+        times: List of time values for each frame.
+        solutions: List of solution arrays for each frame.
+        grids: List of element boundary arrays (xelem) for each frame.
+        coords: List of coordinate arrays for each frame.
+        solver: Solver instance for accessing simulation parameters (icase, etc.).
+        training_params: Training parameter dict for title display.
+        include_exact: Whether to overlay exact solution. Defaults to True.
+        output_dir: Directory to save animation. If None, animation is not saved.
+        model_path: Path to model file for filename generation.
+        initial_refinement: Initial refinement level for title display.
+        element_budget: Element budget for title display.
         
     Returns:
-        str: Path to saved animation file
+        str or None: Path to saved animation file, or None if not saved.
+    
+    Note:
+        Requires ffmpeg to be installed for MP4 export. Animation shows:
+        - Blue line with markers: RL-AMR numerical solution
+        - Red dashed line: Exact solution (if include_exact=True)
+        - Magenta vertical lines: Element boundaries
+        - Text overlays: Frame number, time, element count
     """
     # Set up plot
     plt.rcParams['animation.html'] = 'jshtml'
-    # plt.style.use('ggplot')
     plt.style.use('seaborn-v0_8-dark-palette')
     
     fig, ax = plt.subplots(figsize=(12, 8))
@@ -204,13 +313,20 @@ def create_animation(times, solutions, grids, coords, solver, training_params,
     # Add vertical lines for element boundaries
     boundary_lines = []
     for x in grids[0]:
-        # boundary_lines.append(ax.axvline(x, color='darkmagenta', linestyle=':', alpha=0.7, linewidth=1))
         boundary_lines.append(ax.axvline(x, color='darkmagenta', linestyle='-', linewidth=1, alpha=0.8))
     
     ax.legend()
     
     def update_data(frame):
-        """Update function for animation."""
+        """Update plot data for animation frame.
+        
+        Called by FuncAnimation to update all plot elements for each frame.
+        Updates solution line, scatter points, exact solution (if shown),
+        element boundaries, and text annotations.
+        
+        Args:
+            frame: Frame index (0 to len(solutions)-1).
+        """
         # Update solution plot
         solution_line.set_ydata(solutions[frame])
         solution_line.set_xdata(coords[frame])
@@ -228,11 +344,7 @@ def create_animation(times, solutions, grids, coords, solver, training_params,
         boundary_lines.clear()
         
         for x in grids[frame]:
-            # boundary_lines.append(ax.axvline(x, color='gray', linestyle=':', alpha=0.7, linewidth=1))
             boundary_lines.append(ax.axvline(x, color='darkmagenta', linestyle=':', alpha=0.7, linewidth=1))
-        
-        # Update tick marks
-        # ax.set_xticks(grids[frame])
         
         # Update text
         frame_text.set_text(f'Frame: {frame}/{len(solutions)-1}')
@@ -245,7 +357,6 @@ def create_animation(times, solutions, grids, coords, solver, training_params,
         fig=fig,
         func=update_data,
         frames=len(solutions),
-        # interval=50,  # 50ms between frames
         interval=12,
         blit=False
     )
@@ -270,23 +381,33 @@ def create_animation(times, solutions, grids, coords, solver, training_params,
 def create_snapshot(times, solutions, grids, coords, solver, training_params,
                    include_exact=True, output_dir=None, model_path=None, n_snapshots=5,
                    initial_refinement=None, element_budget=None):
-    """
-    Create snapshot plot with multiple timesteps.
+    """Create snapshot plot with multiple timesteps.
+    
+    Generates a multi-panel figure showing the solution at evenly-spaced
+    timesteps throughout the simulation. Useful for publication figures
+    and quick visual inspection of solution evolution.
     
     Args:
-        times (list): Time history
-        solutions (list): Solution history
-        grids (list): Grid boundary history  
-        coords (list): Coordinate history
-        solver: Solver instance
-        training_params (dict): Training parameters
-        include_exact (bool): Whether to include exact solution
-        output_dir (str): Directory to save plot
-        model_path (str): Path to model file
-        n_snapshots (int): Number of snapshot timesteps
+        times: List of time values for all frames.
+        solutions: List of solution arrays for all frames.
+        grids: List of element boundary arrays for all frames.
+        coords: List of coordinate arrays for all frames.
+        solver: Solver instance for accessing simulation parameters.
+        training_params: Training parameter dict for title display.
+        include_exact: Whether to overlay exact solution. Defaults to True.
+        output_dir: Directory to save plot. If None, plot is not saved.
+        model_path: Path to model file for filename generation.
+        n_snapshots: Number of timesteps to show. Defaults to 5.
+        initial_refinement: Initial refinement level for title display.
+        element_budget: Element budget for title display.
         
     Returns:
-        str: Path to saved plot file
+        str or None: Path to saved plot file, or None if not saved.
+    
+    Note:
+        Saves both PNG (for quick viewing) and PDF (for publication) formats.
+        Each subplot shows solution with markers, exact solution (dashed),
+        and element boundaries (gray vertical lines).
     """
     # Select evenly spaced timestep indices
     total_frames = len(times)
@@ -334,10 +455,8 @@ def create_snapshot(times, solutions, grids, coords, solver, training_params,
         ax.set_ylim([-0.1, 1.2])
         ax.set_xlabel('Domain Position')
         ax.set_ylabel('Solution Value')
-        # ax.set_title(f'Time = {times[frame_idx]:.3f}, Elements = {len(grids[frame_idx])-1}')
         # ENHANCED TITLE WITH LEVEL INFO 
         title = f'Time = {times[frame_idx]:.3f}, Elements = {len(grids[frame_idx])-1}\n'
-        # title += f'Max Level = {current_max_level} (set: {solver.max_level}), Levels: {level_str}'
         ax.set_title(title, fontsize=10)
         ax.grid(True, alpha=0.3)
         
@@ -369,19 +488,33 @@ def create_snapshot(times, solutions, grids, coords, solver, training_params,
 
 def create_final_plot(solver, results, training_params, include_exact=True, 
                      output_dir=None, model_path=None, initial_refinement=None, element_budget=None):
-    """
-    Create final timestep plot with metrics.
+    """Create final timestep plot with metrics.
+    
+    Generates a single-panel figure showing the final state of the simulation
+    with comprehensive metrics displayed. Useful for quick assessment of
+    model performance without full animation overhead.
     
     Args:
-        solver: Solver instance after simulation
-        results (dict): Results dictionary from simulation
-        training_params (dict): Training parameters
-        include_exact (bool): Whether to include exact solution
-        output_dir (str): Directory to save plot
-        model_path (str): Path to model file
+        solver: Solver instance after simulation completion. Contains final
+            solution (q), coordinates (coord), element boundaries (xelem).
+        results: Results dictionary from run_single_model containing metrics.
+        training_params: Training parameter dict for title display.
+        include_exact: Whether to overlay exact solution. Defaults to True.
+        output_dir: Directory to save plot. If None, plot is not saved.
+        model_path: Path to model file for filename generation.
+        initial_refinement: Initial refinement level for title display.
+        element_budget: Element budget for title display.
         
     Returns:
-        str: Path to saved plot file
+        str or None: Path to saved plot file, or None if not saved.
+    
+    Note:
+        Saves both PNG and PDF formats. Displays metrics including:
+        - L2 error (mesh-dependent and grid-normalized)
+        - Total computational cost
+        - Element counts (initial, final)
+        - Total adaptations
+        - Max/mean pointwise error (if include_exact=True)
     """
     # Calculate exact solution at final time
     final_exact = exact_solution(solver.coord, solver.npoin_dg, solver.time, solver.icase)[0]
@@ -461,24 +594,61 @@ Mean Error: {np.mean(pointwise_error):.6e}"""
 def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5, 
                     nop=4, courant_max=0.1, icase=1, plot_mode=None, include_exact=True,
                     verbose=False, output_dir=None, initial_refinement=0):
-    """
-    Run a single model evaluation with comprehensive metrics collection.
+    """Run a single model evaluation with comprehensive metrics collection.
+    
+    This is the main entry point for programmatic model evaluation. Loads a
+    trained RL model, runs a complete simulation with adaptive mesh refinement,
+    and returns comprehensive metrics suitable for analysis pipelines.
     
     Args:
-        model_path (str): Path to the trained model file
-        time_final (float): Final simulation time
-        element_budget (int): Maximum number of elements allowed
-        max_level (int): Maximum refinement level
-        nop (int): Polynomial order
-        courant_max (float): CFL number
-        icase (int): Test case identifier
-        plot_mode (str): Plotting mode ('animate', 'snapshot', 'final', None)
-        include_exact (bool): Whether to include exact solution in plots
-        verbose (bool): Whether to print detailed logs
-        output_dir (str): Directory to save plots
+        model_path: Path to the trained model file (.zip format from SB3).
+        time_final: Final simulation time. Defaults to 1.0.
+        element_budget: Maximum number of elements allowed. Defaults to 50.
+        max_level: Maximum refinement level. Defaults to 5.
+        nop: Polynomial order (number of LGL points - 1). Defaults to 4.
+        courant_max: CFL number for timestep calculation. Defaults to 0.1.
+        icase: Test case identifier for initial condition. Defaults to 1.
+        plot_mode: Plotting mode ('animate', 'snapshot', 'final', or None).
+            Defaults to None (no plotting).
+        include_exact: Whether to include exact solution in plots. Defaults to True.
+        verbose: Whether to print detailed logs. Defaults to False.
+        output_dir: Directory to save plots. Required if plot_mode is set.
+        initial_refinement: Initial uniform refinement level to apply before
+            simulation. 0 means no initial refinement. Defaults to 0.
         
     Returns:
-        dict: Comprehensive evaluation results
+        dict: Comprehensive evaluation results containing:
+            - final_l2_error: Mesh-dependent L2 error at final time
+            - grid_normalized_l2_error: Mesh-independent L2 error
+            - total_cost: Sum of element counts across all timesteps
+            - final_elements: Number of elements at final time
+            - total_adaptations: Total mesh adaptations performed
+            - training_parameters: Extracted training params (or None)
+            - simulation_metrics: Detailed metrics dict with:
+                - initial_elements, max_elements, min_elements
+                - total_timesteps, final_time, average_elements
+                - element_count_history, adaptation_count_history
+                - model_path, number_of_timesteps
+                - no_amr_baseline_cost, cost_ratio
+            - plot_path: Path to saved plot (if plot_mode is set)
+    
+    Raises:
+        FileNotFoundError: If model_path does not exist.
+    
+    Example:
+        >>> results = run_single_model(
+        ...     model_path='models/gamma_50_step_0.05_rl_25_budget_30/final_model.zip',
+        ...     time_final=1.0,
+        ...     element_budget=80,
+        ...     icase=1
+        ... )
+        >>> print(f"Error: {results['grid_normalized_l2_error']:.6e}")
+        >>> print(f"Cost ratio: {results['simulation_metrics']['cost_ratio']:.3f}")
+    
+    Note:
+        The cost_ratio metric compares total cost against a no-AMR baseline
+        (uniform mesh with initial element count). Values < 1.0 indicate
+        the AMR strategy is more efficient than uniform refinement.
     """
     
     # Validate model path
@@ -618,7 +788,6 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
     import math
     number_of_timesteps = math.ceil(time_final / solver.dt)
     no_amr_baseline_cost = actual_initial_elements * number_of_timesteps
-    # no_amr_baseline_cost = actual_initial_elements * step_count
     cost_ratio = total_cost / no_amr_baseline_cost
 
     # Validation check - cost ratio should never exceed 1.0
@@ -652,7 +821,6 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
         }
     }
     
-    # Create plots based on mode
     # Create plots based on mode
     if plot_mode and output_dir:
         if plot_mode == 'animate' and collect_full_history:
@@ -688,7 +856,40 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
     return results
 
 def main():
-    """Main function with argument parsing for command line usage"""
+    """Main entry point for command line usage.
+    
+    Parses command line arguments and runs model evaluation. Supports
+    all simulation parameters, plotting options, and output configuration.
+    
+    Command Line Arguments:
+        Required:
+            --model-path: Path to trained model file (.zip)
+        
+        Simulation Parameters:
+            --time-final: Final simulation time (default: 1.0)
+            --element-budget: Maximum elements (default: 50)
+            --max-level: Maximum refinement level (default: 5)
+            --nop: Polynomial order (default: 4)
+            --courant-max: CFL number (default: 0.1)
+            --icase: Test case identifier (default: 1)
+            --initial-refinement: Initial refinement level (default: 0)
+        
+        Plotting Options:
+            --plot-mode: 'animate', 'snapshot', or 'final'
+            --include-exact / --no-exact: Toggle exact solution overlay
+            --output-dir: Directory for plots
+        
+        Output Options:
+            --verbose: Enable detailed logging
+            --output-file: Save results to JSON file
+    
+    Example:
+        python single_model_runner.py \\
+            --model-path models/gamma_50_step_0.05_rl_25_budget_30/final_model.zip \\
+            --plot-mode final \\
+            --time-final 1.0 \\
+            --verbose
+    """
     parser = argparse.ArgumentParser(description='Evaluate a single RL model on 1D wave equation')
     
     # Required arguments
@@ -770,4 +971,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

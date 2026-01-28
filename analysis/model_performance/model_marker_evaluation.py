@@ -168,52 +168,20 @@ class ModelMarkerEvaluation:
         
         return sorted_elements
     
-    # def get_observation(self, element_idx):
-    #     """
-    #     Get observation for an element in the format expected by the model.
-        
-    #     Args:
-    #         element_idx: Index of element in active_grid
-                
-    #     Returns:
-    #         dict: Observation dictionary compatible with the trained model
-    #     """
-    #     # Get local solution jumps
-    #     local_jumps, _ = self.get_element_jumps(element_idx)
-        
-    #     # Calculate average of local jumps for this element
-    #     avg_local_jump = np.mean(local_jumps) if np.any(local_jumps) else 0.0
-    #     avg_local_jump = 0.0 if np.isnan(avg_local_jump) else avg_local_jump
-        
-    #     # Compute average jump across all elements
-    #     all_jumps = []
-    #     for i in range(len(self.solver.active)):
-    #         jumps, _ = self.get_element_jumps(i)
-    #         if not np.any(np.isnan(jumps)):
-    #             all_jumps.append(np.mean(jumps))
-        
-    #     avg_jump = np.mean(all_jumps) if all_jumps else 0.0
-    #     avg_jump = 0.0 if np.isnan(avg_jump) else avg_jump
-        
-    #     # Current resource usage
-    #     resource_usage = len(self.solver.active) / self.element_budget
-        
-    #     # Get local solution values
-    #     element_nodes = self.solver.intma[:, element_idx]
-    #     solution_values = self.solver.q[element_nodes]
-    #     solution_values = np.nan_to_num(solution_values)
-        
-    #     observation = {
-    #         'avg_local_jump': np.array([avg_local_jump], dtype=np.float32),
-    #         'avg_jump': np.array([avg_jump], dtype=np.float32),
-    #         'resource_usage': np.array([resource_usage], dtype=np.float32),
-    #         'solution_values': solution_values.astype(np.float32)
-    #     }
-        
-    #     return observation
+
 
     def _find_left_neighbor_idx(self, element_idx: int) -> int:
-        """Find index of left neighbor in active grid. Returns -1 if none."""
+        """Find index of left neighbor in active grid.
+    
+        Handles periodic boundary conditions by wrapping to the last element
+        when at the left domain boundary.
+        
+        Args:
+            element_idx: Index of element in the active list.
+        
+        Returns:
+            int: Index of left neighbor in active list, or -1 if not found.
+        """
         elem = self.solver.active[element_idx]
         if elem > 1:
             target_elem = elem - 1
@@ -225,7 +193,17 @@ class ModelMarkerEvaluation:
         return left_active_idx[0] if len(left_active_idx) > 0 else -1
 
     def _find_right_neighbor_idx(self, element_idx: int) -> int:
-        """Find index of right neighbor in active grid. Returns -1 if none."""
+        """Find index of right neighbor in active grid.
+        
+        Handles periodic boundary conditions by wrapping to the first element
+        when at the right domain boundary.
+        
+        Args:
+            element_idx: Index of element in the active list.
+        
+        Returns:
+            int: Index of right neighbor in active list, or -1 if not found.
+        """
         elem = self.solver.active[element_idx]
         if elem < len(self.solver.label_mat):
             target_elem = elem + 1
@@ -237,13 +215,18 @@ class ModelMarkerEvaluation:
         return right_active_idx[0] if len(right_active_idx) > 0 else -1
     
     def _get_element_boundary_jumps(self, element_idx: int) -> float:
-        """
-        Calculate average boundary jump for a single element 
+        """Calculate average boundary jump (γK) for a single element.
+        
+        Computes the solution discontinuity at element boundaries by comparing
+        solution values with neighboring elements. This metric is used for
+        prioritizing elements in the adaptation process.
+        
         Args:
-            element_idx: Index of element in active_grid
-                    
+            element_idx: Index of element in active_grid.
+                
         Returns:
-            float: Average of left and right boundary jumps for this element
+            float: Average of left and right boundary jumps for this element.
+                Returns 0.0 if element index is invalid or on error.
         """
         # Safety check
         if element_idx >= len(self.solver.active):
@@ -285,9 +268,23 @@ class ModelMarkerEvaluation:
         return np.mean(boundary_jumps) if boundary_jumps else 0.0
 
     def get_observation(self, element_idx):
-        """
-        Get observation for an element in the format expected by the model.
-        Updated to match the 6-component observation space from training.
+        """Get observation for an element in the format expected by the model.
+        
+        Constructs the 6-component observation dictionary matching the training
+        environment's observation space. Components are:
+            1. local_avg_jump: Current element's boundary jump (γK)
+            2. left_neighbor_avg_jump: Left neighbor's boundary jump
+            3. right_neighbor_avg_jump: Right neighbor's boundary jump
+            4. global_avg_jump: Average jump across all active elements
+            5. resource_usage: Current elements / element budget ratio
+            6. solution_values: Solution values at element's LGL nodes
+        
+        Args:
+            element_idx: Index of element in active_grid.
+        
+        Returns:
+            dict: Observation dictionary with numpy arrays for each component,
+                compatible with the trained A2C model's observation space.
         """
         # 1. Current element boundary jump (γK)
         local_avg_jump = self._get_element_boundary_jumps(element_idx)
@@ -555,36 +552,9 @@ class ModelMarkerEvaluation:
         successful_adaptations = 0
         processed_elements = set()
 
-
-        # over_budget = len(self.solver.active) >= self.element_budget
-    
-        # if over_budget and self.verbose:
-        #     print(f"Over budget ({len(self.solver.active)}/{self.element_budget}) - allowing coarsening only")
-        
         
         # Process each element in priority order
         for elem_number, original_idx, non_conformity in sorted_elements:
-            # Check if we've hit the element budget
-            # if len(self.solver.active) >= self.element_budget:
-            #     if self.verbose:
-            #         print(f"Reached element budget ({self.element_budget}), stopping adaptation")
-            #     break
-            # if over_budget:
-            # # When over budget, only proceed if we can potentially coarsen
-            # # Let the model decide, but filter actions later
-            #     pass
-            # else:
-            #     # Normal budget check for under-budget scenarios
-            #     if len(self.solver.active) >= self.element_budget:
-            #         if self.verbose:
-            #             print(f"Reached element budget ({self.element_budget}), stopping adaptation")
-            #         break
-                    
-            # # Check if we've hit the max adaptations limit
-            # if max_adaptations is not None and successful_adaptations >= max_adaptations:
-            #     if self.verbose:
-            #         print(f"Reached maximum adaptations limit ({max_adaptations})")
-            #     break
                     
             # Skip elements with very low non-conformity
             if non_conformity < 1e-10:
@@ -617,16 +587,6 @@ class ModelMarkerEvaluation:
             action_int = int(action.item()) if hasattr(action, 'item') else int(action)
             mapped_action = self.action_mapping[action_int]
 
-            # if over_budget:
-            # # When over budget, only allow coarsening actions
-            #     if mapped_action == 1:  # refine
-            #         if self.verbose:
-            #             print(f"Element {elem_number}: blocking refinement (over budget)")
-            #         mapped_action = 0  # Convert to do nothing
-            #     elif mapped_action == -1:  # coarsen
-            #         if self.verbose:
-            #             print(f"Element {elem_number}: allowing coarsening (over budget)")
-            #     # Do nothing actions (0) are always allowed
             
             # Skip do-nothing actions if we're just tracking them
             if mapped_action == 0:

@@ -100,7 +100,15 @@ class DGWaveSolverEvaluation:
         self._update_matrices()
         
     def _initialize_mesh(self):
-        """Initialize the mesh and grid structures."""
+        """Initialize the mesh and grid structures.
+        
+        Creates the computational grid, element connectivity, and AMR forest
+        data structures. Sets up:
+            - npoin_cg, npoin_dg: Node counts for CG and DG representations
+            - label_mat, info_mat: Forest data structures for AMR hierarchy
+            - active: Array of currently active element IDs
+            - coord, intma, periodicity: Grid coordinates and connectivity
+        """
         self.npoin_cg = self.nop * self.nelem + 1
         self.npoin_dg = self.ngl * self.nelem
         self.label_mat, self.info_mat, self.active = forest(self.xelem, self.max_level)
@@ -110,24 +118,54 @@ class DGWaveSolverEvaluation:
         )
         
     def _initialize_solution(self):
-        """Initialize the solution based on test case."""
+        """Initialize the solution based on test case.
+        
+        Evaluates the exact solution at t=0 for the specified icase.
+        Also sets the wave_speed attribute from the exact solution function.
+        
+        Returns:
+            np.ndarray: Initial solution values at all grid points.
+        """
         q, self.wave_speed = exact_solution(
             self.coord, self.npoin_dg, self.time, self.icase
         )
         return q
     
     def _initialize_forcing(self):
-        """Initialize the forcing function based on test case."""
+        """Initialize the forcing function based on test case.
+        
+        Computes the effective forcing function used for AMR refinement
+        indicators at the initial time.
+        
+        Returns:
+            np.ndarray: Forcing function values at all grid points.
+        """
         self.f = eff(self.coord, self.npoin_dg, self.icase, self.wave_speed, self.time)
         return self.f
     
     def _update_forcing(self):
-        """Update the forcing function based on current time."""
+        """Update the forcing function based on current time.
+        
+        Recomputes the effective forcing function at the current simulation
+        time. Called after mesh adaptation and time stepping.
+        
+        Returns:
+            np.ndarray: Updated forcing function values at all grid points.
+        """
         self.f = eff(self.coord, self.npoin_dg, self.icase, self.wave_speed, self.time)
         return self.f
         
     def _initialize_projections(self):
-        """Initialize projection matrices for AMR operations."""
+        """Initialize projection matrices for AMR operations.
+        
+        Creates the projection matrices used for solution transfer during
+        mesh adaptation:
+            - PS1, PS2: Prolongation matrices (coarse to fine, left/right child)
+            - PG1, PG2: Restriction matrices (fine to coarse, left/right child)
+        
+        These matrices enable conservative solution projection when elements
+        are refined or coarsened.
+        """
         RM = create_RM_matrix(self.ngl, self.nq, self.wnq, self.psi)
         self.PS1, self.PS2, self.PG1, self.PG2 = projections(
             RM, self.ngl, self.nq, self.wnq, self.xgl, self.xnq
@@ -545,6 +583,8 @@ class DGWaveSolverEvaluation:
             element_budget: Maximum allowed number of elements
             balance: Whether to enforce 2:1 balance
             update_dt: Whether to update time step after adaptation
+            ignore_budget: If True, allow adaptation even if it exceeds budget.
+                Used during initial refinement setup. Defaults to True.
             
         Returns:
             bool: Whether adaptation was successful
