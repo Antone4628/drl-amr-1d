@@ -1,18 +1,93 @@
 """
-Pareto Key Models Analyzer - Thesis Visualization Tool
+Stage 2 Pareto Key Models Analyzer for DRL-AMR evaluation results.
 
-This script provides specialized analysis for thesis presentation focusing on:
-- Clean pareto-only single family plots
-- Key model identification (best accuracy, best cost, optimal neutral)
-- Configurable model annotation with labels and arrows
+This module provides specialized analysis for thesis presentation, focusing on
+Pareto-optimal model identification and key model selection. It is Stage 2 of
+the three-stage analysis pipeline:
+
+    Stage 1: Per-Configuration Analysis (comprehensive_analyzer.py)
+        81 models per config → parameter family plots, Pareto fronts
+              ↓
+    Stage 2: Key Model Identification (this module)
+        Identify 3 key models per config → export to aggregate CSVs
+        9 configs × 3 key models = 27 key models
+              ↓
+    Stage 3: Cross-Configuration Analysis (key_models_analyzer.py)
+        27 key models → global Pareto front, flagship model selection
+
+Purpose
+-------
+For each evaluation configuration, this module:
+1. Identifies three key models:
+   - **Best Accuracy**: Lowest grid_normalized_l2_error
+   - **Best Cost**: Lowest cost_ratio
+   - **Optimal Neutral**: Smallest distance_to_ideal (balanced tradeoff)
+2. Exports key models to aggregate CSV files for Stage 3 analysis
+3. Generates Pareto-focused visualizations for thesis presentation
+
+Key Features
+------------
+- Clean Pareto-only single family plots
+- Key model identification with configurable annotation
 - Flexible baseline inclusion (none, minimal, full)
-- Optional performance zones
+- Optional performance zone visualization
+- Export to aggregate CSV files for cross-configuration analysis
 
-Designed for progressive visual storytelling in thesis results section.
+Input Files
+-----------
+- ``analysis/data/model_performance/<sweep_name>/model_results_ref<X>_budget<Y>_max<Z>.csv``
+  Contains 81 rows (one per model) from batch evaluation.
 
-Usage:
-    python pareto_key_models_analyzer.py session3_100k_uniform --pareto-family gamma_c --identify-key-models
-    python pareto_key_models_analyzer.py session3_100k_uniform --pareto-family gamma_c --baseline-mode minimal --no-zones
+Output Files
+------------
+**Plots** (in ``comprehensive_analysis/``):
+- ``pareto_only_<family>_family_<config>.pdf`` - Pareto-only family plot
+- ``annotated_pareto_<family>_family_<config>.pdf`` - With key model annotations
+
+**Aggregate CSVs** (in ``aggregate_results/``):
+- ``lowest_cost_models.csv`` - Best cost model from each configuration
+- ``lowest_l2_models.csv`` - Best accuracy model from each configuration
+- ``optimal_neutral_models.csv`` - Optimal neutral model from each configuration
+
+Each aggregate CSV accumulates one row per configuration as Stage 2 is run
+for each config. After processing all 9 configurations, each file will have
+9 rows (27 key models total).
+
+Usage
+-----
+Command line::
+
+    # Basic key model identification for one configuration
+    python pareto_key_models_analyzer.py session5_mexican_hat_200k \\
+        --input-file model_results_ref4_budget80_max4.csv \\
+        --pareto-family gamma_c --identify-key-models --verbose
+
+    # With export to aggregate CSVs
+    python pareto_key_models_analyzer.py session5_mexican_hat_200k \\
+        --input-file model_results_ref4_budget80_max4.csv \\
+        --pareto-family gamma_c --identify-key-models --export-key-models
+
+    # Process all 9 configurations (typical workflow)
+    for f in analysis/data/model_performance/<sweep>/model_results_ref*.csv; do
+        python pareto_key_models_analyzer.py <sweep> \\
+            --input-file $(basename $f) \\
+            --pareto-family gamma_c --identify-key-models --export-key-models
+    done
+
+Key Models Definition
+---------------------
+- **Best Accuracy (lowest_l2)**: Model with minimum grid_normalized_l2_error.
+  Prioritizes solution quality over computational cost.
+- **Best Cost (lowest_cost)**: Model with minimum cost_ratio.
+  Prioritizes computational efficiency over accuracy.
+- **Optimal Neutral (optimal_neutral)**: Model with minimum distance_to_ideal.
+  Balanced tradeoff using normalized Euclidean distance in cost-error space.
+
+See Also
+--------
+- comprehensive_analyzer : Stage 1 per-configuration analysis
+- key_models_analyzer : Stage 3 cross-configuration analysis
+- 1D_DRL_AMR_COMPLETE_WORKFLOW.md : Full pipeline documentation
 """
 
 import numpy as np
@@ -37,18 +112,92 @@ sys.path.append(PROJECT_ROOT)
 
 class ParetoKeyModelsAnalyzer:
     """
-    Comprehensive analyzer for AMR parameter sweep results with distance-to-ideal zones.
+    Analyzer for identifying key models and generating Pareto-focused visualizations.
+    
+    This class provides Stage 2 analysis functionality: identifying the three
+    key models (best accuracy, best cost, optimal neutral) from each evaluation
+    configuration and exporting them to aggregate CSV files for cross-configuration
+    analysis in Stage 3.
+    
+    Attributes
+    ----------
+    sweep_name : str
+        Name of the parameter sweep being analyzed.
+    verbose : bool
+        Whether to print detailed progress information.
+    results_dir : str
+        Path to the sweep's results directory.
+    csv_path : str
+        Path to the input CSV file with model results.
+    output_dir : str
+        Path to the output directory for generated plots.
+    df : pandas.DataFrame
+        Loaded model results with computed metrics (distance_to_ideal,
+        performance_zone).
+    ideal_point : dict
+        Dictionary with 'cost' and 'error' keys for the ideal point.
+    zone_boundaries : dict
+        Percentile-based zone boundary thresholds.
+    parameter_families : dict
+        Configuration for each of the four parameter families.
+    include_baselines : bool
+        Whether to include baseline comparisons.
+    baseline_methods : str or None
+        Comma-separated list of baseline methods to load.
+    baseline_config : str or None
+        Override for baseline configuration detection.
+    baseline_data : dict
+        Loaded baseline data keyed by method name.
+    
+    Examples
+    --------
+    Basic key model identification:
+    
+    >>> analyzer = ParetoKeyModelsAnalyzer(
+    ...     sweep_name='session5_mexican_hat_200k',
+    ...     input_file='model_results_ref4_budget80_max4.csv',
+    ...     verbose=True
+    ... )
+    >>> key_models = analyzer.identify_key_models()
+    >>> print(f"Best accuracy: {key_models['best_accuracy']['grid_normalized_l2_error']:.6f}")
+    
+    Export to aggregate CSVs:
+    
+    >>> config_info = analyzer.extract_configuration_info()
+    >>> csv_paths = analyzer.get_aggregate_csv_paths()
+    >>> analyzer.export_key_model_to_csv(
+    ...     key_models['best_cost'], config_info, csv_paths['lowest_cost']
+    ... )
     """
     
     def __init__(self, sweep_name, input_file=None, verbose=False, 
              include_baselines=False, baseline_methods=None, baseline_config=None, custom_output_dir=None):
         """
-        Initialize the comprehensive analyzer.
+        Initialize the Pareto key models analyzer.
+        
+        Loads the CSV data, validates required columns, computes performance
+        metrics (ideal point, distances, zones), and optionally loads baseline
+        comparison data.
         
         Args:
-            sweep_name (str): Name of the sweep (e.g., 'session3_100k_uniform')
-            input_file (str): Optional CSV filename. If None, auto-detects.
-            verbose (bool): Whether to print detailed logs
+            sweep_name: Name of the sweep (e.g., 'session3_100k_uniform').
+            input_file: Optional CSV filename. If None, auto-detects by looking
+                for model_results_*.csv files in the results directory.
+            verbose: Whether to print detailed logs during initialization
+                and analysis.
+            include_baselines: Whether to load and include baseline comparison
+                data in generated plots.
+            baseline_methods: Comma-separated string of baseline methods to load
+                (e.g., 'conventional-amr'). If None, auto-detects.
+            baseline_config: Override for baseline configuration string
+                (e.g., 'ref4_budget80_max4'). If None, extracts from filename.
+            custom_output_dir: Custom output directory path. If None, uses
+                default: ``<results_dir>/comprehensive_analysis/``.
+        
+        Raises:
+            FileNotFoundError: If the CSV file cannot be found.
+            ValueError: If required columns are missing or L2 errors are
+                non-positive.
         """
         self.sweep_name = sweep_name
         self.verbose = verbose
@@ -72,7 +221,6 @@ class ParetoKeyModelsAnalyzer:
             self.output_dir = custom_output_dir
         else:
             self.output_dir = os.path.join(self.results_dir, 'comprehensive_analysis')        
-        # self.output_dir = os.path.join(self.results_dir, 'comprehensive_analysis')
         
         # Create output directory
         os.makedirs(self.output_dir, exist_ok=True)
@@ -150,12 +298,16 @@ class ParetoKeyModelsAnalyzer:
         """
         Generate filename with configuration information included.
         
+        Creates a filename that includes the evaluation configuration
+        (initial_refinement, element_budget, max_level) for clear identification.
+        
         Args:
-            base_name (str): Base filename (e.g., 'pareto_only_gamma_c_family')
-            output_format (str): Output format ('png', 'pdf', 'svg')
-            
+            base_name: Base filename (e.g., 'pareto_only_gamma_c_family').
+            output_format: Output format extension ('png', 'pdf', 'svg').
+        
         Returns:
-            str: Config-specific filename
+            str: Config-specific filename like
+                'pareto_only_gamma_c_family_ref4_budget80_max4.png'.
         """
         config_info = self.extract_configuration_info()
         config_suffix = config_info['config_id']
@@ -164,61 +316,20 @@ class ParetoKeyModelsAnalyzer:
         filename = f"{base_name}_{config_suffix}.{output_format}"
         return filename 
 
-    # def extract_configuration_info(self):
-    #     """
-    #     Extract configuration information from the input file name.
-        
-    #     Returns:
-    #         dict: Configuration info with keys: initial_refinement, element_budget, max_level, config_id
-    #     """
-    #     # Get the base filename
-    #     filename = os.path.basename(self.csv_path)
-        
-    #     # Default values
-    #     config_info = {
-    #         'initial_refinement': None,
-    #         'element_budget': None,
-    #         'max_level': None,
-    #         'config_id': 'unknown'
-    #     }
-        
-    #     # Extract from filename pattern: model_results_ref{refinement}_budget{budget}.csv
-    #     if 'model_results_ref' in filename:
-    #         try:
-    #             # Remove prefix and suffix
-    #             config_part = filename.replace('model_results_ref', '').replace('.csv', '')
-    #             # Split on '_budget'
-    #             parts = config_part.split('_budget')
-    #             if len(parts) == 2:
-    #                 initial_refinement = int(parts[0])
-    #                 element_budget = int(parts[1])
-                    
-    #                 # Try to extract max_level from filename, fallback to initial_refinement
-    #                 max_level = initial_refinement  # Default assumption for current Set A files
-    #                 # Future: could parse _max{level} pattern here when file naming convention changes
-                    
-    #                 config_info.update({
-    #                     'initial_refinement': initial_refinement,
-    #                     'element_budget': element_budget,
-    #                     'max_level': max_level,
-    #                     'config_id': f"ref{initial_refinement}_budget{element_budget}"
-    #                 })
-                    
-    #                 if self.verbose:
-    #                     print(f"Extracted configuration: ref{initial_refinement}_budget{element_budget}_max{max_level}")
-                        
-    #         except (ValueError, IndexError) as e:
-    #             if self.verbose:
-    #                 print(f"Warning: Could not parse configuration from filename {filename}: {e}")
-        
-    #     return config_info
-
     def extract_configuration_info(self):
         """
         Extract configuration information from the input CSV filename.
         
+        Parses the filename pattern to extract evaluation configuration
+        parameters. Supports both old format (ref5_budget150) and new format
+        (ref5_budget150_max5).
+        
         Returns:
-            dict: Configuration info with keys: initial_refinement, element_budget, max_level, config_id
+            dict: Configuration info with keys:
+                - initial_refinement (int or None): Initial mesh refinement level
+                - element_budget (int or None): Maximum elements allowed
+                - max_level (int or None): Maximum refinement level
+                - config_id (str): String identifier like 'ref5_budget150_max5'
         """
         # Get the base filename
         filename = os.path.basename(self.csv_path)
@@ -281,8 +392,11 @@ class ParetoKeyModelsAnalyzer:
         """
         Get the aggregate results directory path, creating it if necessary.
         
+        The aggregate directory stores CSV files that accumulate key models
+        across all evaluation configurations for Stage 3 analysis.
+        
         Returns:
-            str: Path to aggregate results directory
+            str: Path to aggregate results directory.
         """
         aggregate_dir = os.path.join(self.results_dir, 'aggregate_results')
         os.makedirs(aggregate_dir, exist_ok=True)
@@ -292,8 +406,13 @@ class ParetoKeyModelsAnalyzer:
         """
         Get paths for the three aggregate CSV files.
         
+        These files accumulate one key model per configuration:
+        - lowest_cost_models.csv: Best cost model from each config
+        - lowest_l2_models.csv: Best accuracy model from each config
+        - optimal_neutral_models.csv: Optimal neutral model from each config
+        
         Returns:
-            dict: Paths for each key model type
+            dict: Paths keyed by 'lowest_cost', 'lowest_l2', 'optimal_neutral'.
         """
         aggregate_dir = self.get_aggregate_directory()
         return {
@@ -307,7 +426,8 @@ class ParetoKeyModelsAnalyzer:
         Define the headers for the aggregate CSV files.
         
         Returns:
-            list: Column headers including config info and all model data
+            list: Column headers including configuration info followed by
+                all model data columns from the input DataFrame.
         """
         # Configuration columns first
         config_headers = ['config_id', 'initial_refinement', 'element_budget', 'max_level']
@@ -321,10 +441,15 @@ class ParetoKeyModelsAnalyzer:
         """
         Export a single key model to its aggregate CSV file with duplicate handling.
         
+        Appends the key model data to the specified aggregate CSV file. If the
+        file already contains an entry for this configuration, the old entry
+        is replaced (overwrite behavior).
+        
         Args:
-            model_data (pandas.Series): The model data row
-            config_info (dict): Configuration information
-            csv_path (str): Path to the CSV file
+            model_data: The model data (dict from identify_key_models()).
+            config_info: Configuration information dict from
+                extract_configuration_info().
+            csv_path: Path to the aggregate CSV file.
         """
         headers = self.get_export_csv_headers()
         
@@ -365,7 +490,20 @@ class ParetoKeyModelsAnalyzer:
             print(f"  Exported {config_info['config_id']} to {os.path.basename(csv_path)}")
     
     def _load_and_validate_data(self):
-        """Load and validate the CSV data."""
+        """
+        Load and validate the CSV data.
+        
+        Reads the CSV file, checks for required columns, and validates that
+        L2 error values are positive (required for log scaling in plots).
+        
+        Returns:
+            pandas.DataFrame: Validated DataFrame with model results.
+        
+        Raises:
+            FileNotFoundError: If the CSV file does not exist.
+            ValueError: If required columns are missing or L2 errors are
+                non-positive.
+        """
         if not os.path.exists(self.csv_path):
             raise FileNotFoundError(f"Batch results CSV not found: {self.csv_path}")
         
@@ -390,7 +528,15 @@ class ParetoKeyModelsAnalyzer:
         return df
     
     def _calculate_ideal_point(self):
-        """Calculate the ideal point (minimum cost, minimum error intersection)."""
+        """
+        Calculate the ideal point (minimum cost, minimum error intersection).
+        
+        The ideal point represents the theoretical best performance where a model
+        achieves both the lowest cost and lowest error in the dataset.
+        
+        Returns:
+            dict: Dictionary with 'cost' and 'error' keys.
+        """
         ideal_cost = self.df['cost_ratio'].min()
         # FIXED: Use grid_normalized_l2_error
         ideal_error = self.df['grid_normalized_l2_error'].min()
@@ -401,7 +547,15 @@ class ParetoKeyModelsAnalyzer:
         }
     
     def _calculate_distances_to_ideal(self):
-        """Calculate normalized Euclidean distances to the ideal point."""
+        """
+        Calculate normalized Euclidean distances to the ideal point.
+        
+        Uses linear normalization for cost and log-scale normalization for
+        error to ensure equal weighting in the combined distance metric.
+        
+        Returns:
+            pandas.Series: Distance to ideal for each model.
+        """
         # Normalize cost (linear scale)
         cost_min, cost_max = self.df['cost_ratio'].min(), self.df['cost_ratio'].max()
         cost_norm = (self.df['cost_ratio'] - cost_min) / (cost_max - cost_min)
@@ -417,7 +571,15 @@ class ParetoKeyModelsAnalyzer:
         return distances
     
     def _calculate_zone_boundaries(self):
-        """Calculate zone boundaries using percentile approach."""
+        """
+        Calculate zone boundaries using percentile approach.
+        
+        Divides models into four performance zones based on quartiles of
+        distance-to-ideal.
+        
+        Returns:
+            dict: Zone boundary thresholds.
+        """
         distances = self.df['distance_to_ideal']
         boundaries = np.percentile(distances, [25, 50, 75])
         
@@ -429,7 +591,13 @@ class ParetoKeyModelsAnalyzer:
         }
     
     def _assign_performance_zones(self):
-        """Assign performance zones based on distance to ideal."""
+        """
+        Assign performance zones based on distance to ideal.
+        
+        Returns:
+            list: Zone assignment ('Elite', 'Good', 'Fair', or 'Poor') for
+                each model.
+        """
         distances = self.df['distance_to_ideal']
         zones = []
         
@@ -449,8 +617,15 @@ class ParetoKeyModelsAnalyzer:
         """
         Identify the three key models for detailed analysis.
         
+        Finds the best model in each of three categories:
+        - Best Accuracy: Lowest grid_normalized_l2_error
+        - Best Cost: Lowest cost_ratio
+        - Optimal Neutral: Smallest distance_to_ideal
+        
         Returns:
-            dict: Dictionary with 'best_accuracy', 'best_cost', 'optimal_neutral' model info
+            dict: Dictionary with keys 'best_accuracy', 'best_cost',
+                'optimal_neutral', each containing the full model data
+                as a dictionary.
         """
         if self.verbose:
             print("Identifying key models...")
@@ -483,13 +658,21 @@ class ParetoKeyModelsAnalyzer:
 
     def create_pareto_only_family_plot(self, family_name, baseline_mode='full', include_zones=True, output_format='pdf'):
         """
-        Create a clean pareto-only plot for a specific parameter family.
+        Create a clean Pareto-only plot for a specific parameter family.
+        
+        Shows only the Pareto-optimal models (non-dominated solutions) colored
+        by parameter value, with optional zones and baseline comparisons.
         
         Args:
-            family_name (str): Parameter family to focus on
-            baseline_mode (str): 'none', 'minimal', or 'full'
-            include_zones (bool): Whether to include performance zones
-            output_format (str): Output format ('pdf', 'png', 'svg')
+            family_name: Parameter family to focus on ('gamma_c',
+                'step_domain_fraction', 'rl_iterations_per_timestep',
+                or 'element_budget').
+            baseline_mode: Baseline inclusion mode:
+                - 'none': No baselines
+                - 'minimal': No-AMR + most accurate threshold only
+                - 'full': All baseline thresholds
+            include_zones: Whether to include performance zone shading.
+            output_format: Output format ('pdf', 'png', 'svg').
         """
         if self.verbose:
             print(f"Creating pareto-only plot for {family_name} family...")
@@ -572,6 +755,12 @@ class ParetoKeyModelsAnalyzer:
     def _add_minimal_baseline_references(self, ax):
         """
         Add minimal baseline references (no-amr + most accurate threshold baseline).
+        
+        Used when baseline_mode='minimal' to show comparison with conventional
+        AMR without cluttering the plot with all threshold variations.
+        
+        Args:
+            ax: Matplotlib Axes object to draw on.
         """
         if not self.baseline_data:
             if self.verbose:
@@ -614,10 +803,14 @@ class ParetoKeyModelsAnalyzer:
         """
         Add parameter configuration labels with arrows to key models.
         
+        Creates annotations showing the full parameter configuration for each
+        key model, with arrows pointing from the label to the data point.
+        
         Args:
-            ax: Matplotlib axes object
-            key_models: Dictionary with key model information
-            family_name: Parameter family being plotted
+            ax: Matplotlib Axes object to draw on.
+            key_models: Dictionary from identify_key_models() with
+                'best_accuracy', 'best_cost', 'optimal_neutral' entries.
+            family_name: Parameter family being plotted (used for context).
         """
         if self.verbose:
             print("Adding model annotations...")
@@ -680,14 +873,17 @@ class ParetoKeyModelsAnalyzer:
 
     def create_annotated_pareto_plot(self, family_name, key_models, baseline_mode='full', include_zones=True, output_format='pdf'):
         """
-        Create a pareto-only plot with key models annotated.
+        Create a Pareto-only plot with key models annotated.
+        
+        Combines the Pareto-only visualization with annotations showing the
+        parameter configuration for each of the three key models.
         
         Args:
-            family_name (str): Parameter family to focus on
-            key_models (dict): Key models to annotate
-            baseline_mode (str): 'none', 'minimal', or 'full'
-            include_zones (bool): Whether to include performance zones
-            output_format (str): Output format ('pdf', 'png', 'svg')
+            family_name: Parameter family to focus on.
+            key_models: Dictionary from identify_key_models().
+            baseline_mode: 'none', 'minimal', or 'full'.
+            include_zones: Whether to include performance zone shading.
+            output_format: Output format ('pdf', 'png', 'svg').
         """
         if self.verbose:
             print(f"Creating annotated pareto plot for {family_name} family...")
@@ -770,7 +966,17 @@ class ParetoKeyModelsAnalyzer:
             print(f"Annotated pareto {family_name} plot saved")
 
     def _load_baseline_data(self):
-        """Load baseline data files matching the model configuration."""
+        """
+        Load baseline data files matching the model configuration.
+        
+        Searches for baseline CSV files and loads them for comparison plotting.
+        Supports multi-threshold conventional-AMR files.
+        
+        Returns:
+            dict: Baseline data keyed by method name. Each value is a list
+                of dicts with keys: grid_normalized_l2_error, cost_ratio,
+                method, threshold, file.
+        """
         baseline_data = {}
         
         # Extract configuration from model file or use override
@@ -838,84 +1044,18 @@ class ParetoKeyModelsAnalyzer:
                     print(f"  Baseline file not found: {baseline_file}")
         
         return baseline_data
-
-    # def _load_baseline_data(self):
-    #     """Load baseline data files matching the model configuration."""
-    #     baseline_data = {}
-        
-    #     # Extract configuration from model file or use override
-    #     if self.baseline_config:
-    #         config = self.baseline_config
-    #     else:
-    #         # Auto-detect config from model file name
-    #         # e.g., model_results_ref0_budget50.csv -> ref0_budget50
-    #         model_filename = os.path.basename(self.csv_path)
-    #         if 'model_results_' in model_filename:
-    #             config = model_filename.replace('model_results_', '').replace('.csv', '')
-    #         else:
-    #             config = 'ref0_budget50'  # Default fallback
-        
-    #     if self.verbose:
-    #         print(f"Looking for baseline data with config: {config}")
-        
-    #     # Determine which methods to look for
-    #     if self.baseline_methods:
-    #         methods = [m.strip() for m in self.baseline_methods.split(',')]
-    #     else:
-    #         # Auto-detect available baseline methods
-    #         methods = ['no-amr', 'conventional-amr']
-        
-    #     # Try to load each baseline method
-    #     for method in methods:
-    #         baseline_file = f"baseline_results_{method}_{config}.csv"
-    #         baseline_path = os.path.join(self.results_dir, baseline_file)
-            
-    #         if os.path.exists(baseline_path):
-    #             try:
-    #                 df = pd.read_csv(baseline_path)
-    #                 if len(df) > 0:
-    #                     # FIXED: Handle multi-threshold files properly
-    #                     if len(df) > 1:
-    #                         # Multi-threshold file (e.g., conventional-amr with 7 thresholds)
-    #                         baseline_points = []
-    #                         for _, row in df.iterrows():
-    #                             baseline_points.append({
-    #                                 'grid_normalized_l2_error': row['grid_normalized_l2_error'],
-    #                                 'total_cost': row['total_cost'],
-    #                                 'method': method,
-    #                                 'threshold': row.get('threshold_value', 'N/A'),
-    #                                 'file': baseline_file
-    #                             })
-    #                         baseline_data[method] = baseline_points
-                            
-    #                         if self.verbose:
-    #                             print(f"  Loaded {method}: {len(baseline_points)} threshold points")
-    #                             for point in baseline_points:
-    #                                 print(f"    Threshold {point['threshold']}: L2={point['grid_normalized_l2_error']:.3e}, Cost={point['total_cost']:,}")
-    #                     else:
-    #                         # Single threshold file (e.g., no-amr)
-    #                         baseline_data[method] = [{
-    #                             'grid_normalized_l2_error': df['grid_normalized_l2_error'].iloc[0],
-    #                             'total_cost': df['total_cost'].iloc[0],
-    #                             'method': method,
-    #                             'threshold': df.get('threshold_value', [None]).iloc[0],
-    #                             'file': baseline_file
-    #                         }]
-                            
-    #                         if self.verbose:
-    #                             error = df['grid_normalized_l2_error'].iloc[0]
-    #                             cost = df['total_cost'].iloc[0]
-    #                             print(f"  Loaded {method}: L2={error:.3e}, Cost={cost:,}")
-    #             except Exception as e:
-    #                 if self.verbose:
-    #                     print(f"  Failed to load {baseline_file}: {e}")
-    #         elif self.verbose:
-    #             print(f"  Baseline file not found: {baseline_file}")
-        
-    #     return baseline_data
     
     def identify_pareto_optimal_models(self):
-        """Identify Pareto-optimal models (non-dominated solutions)."""
+        """
+        Identify Pareto-optimal models (non-dominated solutions).
+        
+        A model is Pareto-optimal if no other model is strictly better in both
+        cost and accuracy.
+        
+        Returns:
+            list: List of dictionaries, one per Pareto-optimal model,
+                sorted by cost_ratio ascending.
+        """
         df = self.df.copy()
         pareto_models = []
         
@@ -945,7 +1085,12 @@ class ParetoKeyModelsAnalyzer:
         return pareto_models
     
     def _add_ideal_point_overlay(self, ax):
-        """Add ideal point and intersection lines to the plot."""
+        """
+        Add ideal point and intersection lines to the plot.
+        
+        Args:
+            ax: Matplotlib Axes object to draw on.
+        """
         ideal_cost = self.ideal_point['cost']
         ideal_error = self.ideal_point['error']
         
@@ -962,7 +1107,12 @@ class ParetoKeyModelsAnalyzer:
         # REMOVED: The two arrows pointing to ideal point (as requested)
     
     def _set_axis_limits(self, ax):
-        """Set appropriate axis limits to include all model and baseline data."""
+        """
+        Set appropriate axis limits to include all model and baseline data.
+        
+        Args:
+            ax: Matplotlib Axes object to configure.
+        """
         # Get the data ranges - use grid_normalized_l2_error
         cost_min, cost_max = self.df['cost_ratio'].min(), self.df['cost_ratio'].max()
         error_min, error_max = self.df['grid_normalized_l2_error'].min(), self.df['grid_normalized_l2_error'].max()
@@ -999,7 +1149,12 @@ class ParetoKeyModelsAnalyzer:
             print(f"Set axis limits: Cost [{cost_min - cost_padding:.0f}, {cost_max + cost_padding:.0f}], Error [{error_min / error_padding_factor:.3e}, {error_max * error_padding_factor:.3e}]")
     
     def _add_performance_zones(self, ax):
-        """Add performance zone visualization with contour-style boundaries."""
+        """
+        Add performance zone visualization with contour-style boundaries.
+        
+        Args:
+            ax: Matplotlib Axes object to draw on.
+        """
         # Note: Axis limits are now set by _set_axis_limits() method
         
         # Get current axis limits (already set)
@@ -1056,13 +1211,6 @@ class ParetoKeyModelsAnalyzer:
             zone_patches = [Patch(color=color, alpha=0.4, label=label) 
                           for color, label in zip(zone_colors, zone_labels)]
             
-            # Get current legend handles and add zone patches
-            # handles, labels = ax.get_legend_handles_labels()
-            # handles.extend(zone_patches)
-
-            # ax.legend(handles=handles, loc='center right', bbox_to_anchor=(1.02, 1), framealpha=0.9, fontsize=9)
-            # zone_labels = ['Elite (0-25%)', 'Good (25-50%)', 'Fair (50-75%)', 'Poor (75-100%)']
-    
             from matplotlib.patches import Patch
             zone_patches = [Patch(color=color, alpha=0.4, label=label) 
                         for color, label in zip(zone_colors, zone_labels)]  # Use the SAME zone_colors
@@ -1070,7 +1218,6 @@ class ParetoKeyModelsAnalyzer:
             # Create zones legend positioned separately
             zones_legend = ax.legend(handles=zone_patches, 
                                 loc='center right', 
-                                # bbox_to_anchor=(1.02, 0.3),  # Lower on right side
                                 bbox_to_anchor=(0.98, 0.5),
                                 framealpha=0.9, 
                                 fontsize=9,
@@ -1085,7 +1232,15 @@ class ParetoKeyModelsAnalyzer:
                 print(f"Zone levels: {zone_levels}")
     
     def _add_baseline_references(self, ax):
-        """Add baseline reference points to the plot."""
+        """
+        Add baseline reference points to the plot.
+        
+        Plots all baseline methods with appropriate styling. Conventional AMR
+        baselines are shown with a magenta gradient and connected by a dotted line.
+        
+        Args:
+            ax: Matplotlib Axes object to draw on.
+        """
         if not self.baseline_data:
             return
         
@@ -1161,6 +1316,18 @@ class ParetoKeyModelsAnalyzer:
                              include_zones=True, include_baselines=None, output_format='pdf'):
         """
         Create comprehensive parameter family plots with all options.
+        
+        Generates both individual plots for each parameter family and a combined
+        2x2 plot showing all families together. This is the default analysis mode
+        for backward compatibility.
+        
+        Args:
+            include_pareto: Whether to show Pareto-optimal models.
+            include_ideal: Whether to show ideal point overlay.
+            include_zones: Whether to show performance zones.
+            include_baselines: Whether to include baseline references.
+                If None, uses self.include_baselines.
+            output_format: Output format ('pdf', 'png', 'svg').
         """
         # Override baseline setting if provided
         if include_baselines is not None:
@@ -1188,7 +1355,17 @@ class ParetoKeyModelsAnalyzer:
             print(f"Comprehensive plots saved to: {self.output_dir}")
     
     def _create_single_family_plot(self, family_name, pareto_models, include_ideal, include_zones, include_baselines, output_format):
-        """Create a single parameter family plot."""
+        """
+        Create a single parameter family plot.
+        
+        Args:
+            family_name: Name of the parameter family.
+            pareto_models: List of Pareto-optimal model dicts, or None.
+            include_ideal: Whether to show ideal point overlay.
+            include_zones: Whether to show performance zones.
+            include_baselines: Whether to show baseline references.
+            output_format: Output format ('pdf', 'png', 'svg').
+        """
         family = self.parameter_families[family_name]
         
         fig, ax = plt.subplots(figsize=(10, 8))
@@ -1277,7 +1454,16 @@ class ParetoKeyModelsAnalyzer:
         plt.close()
     
     def _create_combined_family_plots(self, pareto_models, include_ideal, include_zones, include_baselines, output_format):
-        """Create combined 2x2 parameter family plots."""
+        """
+        Create combined 2x2 parameter family plots.
+        
+        Args:
+            pareto_models: List of Pareto-optimal model dicts, or None.
+            include_ideal: Whether to show ideal point overlay.
+            include_zones: Whether to show performance zones.
+            include_baselines: Whether to show baseline references.
+            output_format: Output format ('pdf', 'png', 'svg').
+        """
         fig, axes = plt.subplots(2, 2, figsize=(16, 12))
         axes = axes.flatten()
         
@@ -1362,7 +1548,14 @@ class ParetoKeyModelsAnalyzer:
         plt.close()
 
     def _save_plot(self, fig, filename_base, output_format):
-        """Save plot in specified format with config-specific naming."""
+        """
+        Save plot in specified format with config-specific naming.
+        
+        Args:
+            fig: Matplotlib Figure object.
+            filename_base: Base filename without extension.
+            output_format: Output format ('pdf', 'png', 'svg').
+        """
         # Generate config-specific filename
         filename = self._generate_config_filename(filename_base, output_format)
         output_path = os.path.join(self.output_dir, filename)
@@ -1379,25 +1572,14 @@ class ParetoKeyModelsAnalyzer:
         except Exception as e:
             print(f"Warning: Could not save plot {output_path}: {e}")
     
-    # def _save_plot(self, fig, filename_base, output_format):
-    #     """Save plot in specified format."""
-    #     filename = f"{filename_base}.{output_format}"
-    #     output_path = os.path.join(self.output_dir, filename)
-        
-    #     try:
-    #         if output_format.lower() == 'pdf':
-    #             fig.savefig(output_path, bbox_inches='tight', dpi=300)
-    #         else:
-    #             fig.savefig(output_path, bbox_inches='tight', dpi=300)
-            
-    #         if self.verbose:
-    #             print(f"Saved plot: {output_path}")
-                
-    #     except Exception as e:
-    #         print(f"Warning: Could not save plot {output_path}: {e}")
 
 def main():
-    """Main function with argument parsing for command line usage"""
+    """
+    Main function with argument parsing for command line usage.
+    
+    Provides a CLI for running Stage 2 key model identification and export.
+    Supports both single-configuration analysis and batch processing.
+    """
     parser = argparse.ArgumentParser(description='Comprehensive AMR parameter analysis with distance-to-ideal zones')
     
     # Required arguments
@@ -1455,16 +1637,6 @@ def main():
             baseline_config=args.baseline_config,
             custom_output_dir=args.output_dir 
         )
-
-        # Debug baseline loading
-        # if args.verbose:
-        #     if hasattr(analyzer, 'baseline_data') and analyzer.baseline_data is not None and len(analyzer.baseline_data) > 0:
-        #         print(f"Baseline data loaded: {len(analyzer.baseline_data)} rows")
-        #         print("Baseline columns:", list(analyzer.baseline_data.columns))
-        #         print("Baseline data sample:")
-        #         print(analyzer.baseline_data.head())
-        #     else:
-        #         print("No baseline data loaded")
         
         # Handle different analysis modes
         if args.pareto_family:
@@ -1475,20 +1647,6 @@ def main():
                 include_zones=args.include_zones,
                 output_format=args.output_format
             )
-            
-            # Add key model identification if requested
-            # if args.identify_key_models:
-            #     key_models = analyzer.identify_key_models()
-                
-            #     # Create annotated version if requested
-            #     if args.annotate_models:
-            #         analyzer.create_annotated_pareto_plot(
-            #             family_name=args.pareto_family,
-            #             key_models=key_models,
-            #             baseline_mode=args.baseline_mode,
-            #             include_zones=args.include_zones,
-            #             output_format=args.output_format
-            #         )
 
             # Add key model identification if requested
             if args.identify_key_models:
@@ -1549,5 +1707,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
