@@ -2,7 +2,8 @@
 """
 Collect results from SLURM array job.
 
-Reads all JSON files from results directory and combines into a single CSV.
+Reads all JSON files from results directory and combines into a single CSV
+for analysis. Extracts key metrics and training parameters from each result.
 
 Usage:
     python collect_results.py                           # Default output
@@ -110,6 +111,7 @@ def collect_results(results_dir, output_path):
 
 
 def main():
+    """Parse arguments and collect results from JSON files into CSV."""
     parser = argparse.ArgumentParser(description='Collect SLURM array results into CSV')
     parser.add_argument('--results-dir', type=str, 
                         default='analysis/transferability/results',

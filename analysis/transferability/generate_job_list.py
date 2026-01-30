@@ -2,24 +2,48 @@
 """
 Generate job list file for SLURM array submission.
 
-Creates a text file with one command per line. SLURM array task N runs line N.
+Creates a text file with one command per line for parallel execution of
+transferability tests. SLURM array task N runs line N of the job list.
 
 Usage:
-    python generate_job_list.py                     # Creates job_list.txt
-    python generate_job_list.py --output my_jobs.txt
+    python generate_job_list.py --sweep-name session4_100k_uniform
+    python generate_job_list.py --sweep-name session5_mexican_hat_200k --output my_jobs.txt
 """
 
 import argparse
+import os
+import sys
 from pathlib import Path
 
+# Get absolute path to project root
+PROJECT_ROOT = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), 
+    '..',
+    '..'
+))
+sys.path.append(PROJECT_ROOT)
 
 # Import configuration
-from transferability_config import MODELS, TEST_ICASES, SIMULATION_PARAMS
+from analysis.transferability.transferability_config import MODELS, TEST_ICASES, SIMULATION_PARAMS
 # Get script directory for relative paths
 SCRIPT_DIR = Path(__file__).parent
 
 def generate_job_list(output_path, plot_mode='snapshot', sweep_name=None):
-    """Generate job list file."""
+    """Generate job list file for SLURM array submission.
+    
+    Creates a text file where each line is a complete command to run
+    transferability_runner.py with a specific model and icase combination.
+    
+    Args:
+        output_path: Path to write the job list file.
+        plot_mode: Plotting mode to use ('snapshot', 'animate', 'final').
+            Defaults to 'snapshot' for faster execution.
+        sweep_name: Name of the training sweep directory containing models
+            (e.g., 'session4_100k_uniform').
+    
+    Returns:
+        List of command strings that were written to the file.
+    """
     
     # Ensure results directory exists
     results_dir = Path('analysis/transferability/results')
@@ -62,6 +86,7 @@ def generate_job_list(output_path, plot_mode='snapshot', sweep_name=None):
 
 
 def main():
+    """Parse arguments and generate the job list file."""
     parser = argparse.ArgumentParser(description='Generate job list for SLURM array')
     parser.add_argument('--output', type=str, default=str(SCRIPT_DIR / 'job_list.txt'),
                         help='Output file path')

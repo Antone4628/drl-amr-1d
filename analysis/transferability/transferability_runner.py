@@ -1,21 +1,24 @@
 """
-Single Model Runner for Evaluation - Enhanced Version
+Transferability Runner for Cross-IC Model Evaluation
 
-This script evaluates a single trained RL model on the 1D wave equation using 
-Discontinuous Galerkin method with sequential adaptive mesh refinement.
+This script evaluates trained RL models on different initial conditions (icases)
+to test whether AMR policies generalize beyond their training waveform. It extends
+single_model_runner.py with transferability-specific features.
 
-Key features for model evaluation:
+Key features for transferability testing:
+- Configurable icase selection for testing on different waveforms
+- Dynamic y-axis limits based on waveform characteristics
+- Icase-aware filename generation and plot titles
 - Uses projected solutions only (no steady-state solves)
 - Normal timestepping without domain fraction jumps
 - Multiple plotting modes: animate, snapshot, final
 - Optional exact solution comparison
 - Comprehensive metrics collection for accuracy vs cost analysis
-- Enhanced parameter extraction and display
+- JSON output for batch result collection
 
 Usage:
-    python single_model_runner.py --model-path path/to/model.zip --plot-mode animate --include-exact
-    python single_model_runner.py --model-path path/to/model.zip --plot-mode snapshot --time-final 1.0
-    python single_model_runner.py --model-path path/to/model.zip --plot-mode final --time-final 0.5
+    python transferability_runner.py --model-path path/to/model.zip --icase 16 --plot-mode snapshot
+    python transferability_runner.py --model-path path/to/model.zip --icase 10 --output-file results.json
 """
 
 import numpy as np
@@ -33,11 +36,6 @@ PROJECT_ROOT = os.path.abspath(os.path.join(
     '..'
 ))
 sys.path.append(PROJECT_ROOT)
-
-# Import the evaluation solver and adapter
-# from dg_wave_solver_evaluation import DGWaveSolverEvaluation
-# from model_marker_evaluation import ModelMarkerEvaluation
-# from numerical.solvers.utils import exact_solution, calculate_grid_normalized_l2_error
 
 from analysis.model_performance.dg_wave_solver_evaluation import DGWaveSolverEvaluation
 from analysis.model_performance.model_marker_evaluation import ModelMarkerEvaluation
@@ -103,7 +101,21 @@ ICASE_CONFIG = {
 }
 
 def get_icase_config(icase):
-    """Get configuration for an icase, with fallback for unknown cases."""
+    """Get configuration dictionary for a given initial condition case.
+    
+    Retrieves display settings and metadata for the specified icase,
+    including plot limits and whether the waveform has negative values.
+    
+    Args:
+        icase: Integer identifier for the initial condition case.
+    
+    Returns:
+        Dictionary containing:
+            - name: Human-readable name for the waveform
+            - short_name: Abbreviated name for filenames
+            - ylim: Tuple of (ymin, ymax) for plot axis limits
+            - has_negative: Boolean indicating if waveform has negative values
+    """
     if icase in ICASE_CONFIG:
         return ICASE_CONFIG[icase]
     else:
@@ -116,7 +128,14 @@ def get_icase_config(icase):
 
 
 def create_icase_title(icase):
-    """Create formatted string describing the test case."""
+    """Create a formatted title string describing the test case.
+    
+    Args:
+        icase: Integer identifier for the initial condition case.
+    
+    Returns:
+        Formatted string like "Test Case: Gaussian (training) (icase=1)".
+    """
     config = get_icase_config(icase)
     return f"Test Case: {config['name']} (icase={icase})"
 
@@ -156,34 +175,18 @@ def extract_training_parameters(model_path):
         print(f"Warning: Could not extract parameters from path: {e}")
         return None
 
-# def create_model_directory(model_path, base_dir=None):
-#     """
-#     Create organized directory structure for model outputs.
-    
-#     Args:
-#         model_path (str): Path to model file
-#         base_dir (str): Base directory (defaults to PROJECT_ROOT/animations)
-        
-#     Returns:
-#         str: Path to model-specific directory
-#     """
-#     if base_dir is None:
-#         base_dir = os.path.join(PROJECT_ROOT, 'animations')
-    
-#     # Extract model directory name
-#     model_dir_name = Path(model_path).parent.name
-#     model_output_dir = os.path.join(base_dir, model_dir_name)
-    
-#     # Create directory if it doesn't exist
-#     os.makedirs(model_output_dir, exist_ok=True)
-    
-#     return model_output_dir
-
 def create_output_directory(model_path, icase):
-    """
-    Create organized output directory for transferability testing.
+    """Create organized output directory for transferability testing results.
     
-    Structure: analysis/transferability/animations/<model_config>/
+    Creates directory structure: analysis/transferability/animations/<model_config>/
+    
+    Args:
+        model_path: Path to the model file, used to extract configuration name.
+        icase: Integer identifier for the initial condition (unused but kept
+            for potential future per-icase subdirectories).
+    
+    Returns:
+        String path to the created output directory.
     """
     # Extract model configuration name from path
     model_config = Path(model_path).parent.name
@@ -200,34 +203,22 @@ def create_output_directory(model_path, icase):
     os.makedirs(output_dir, exist_ok=True)
     return output_dir
 
-# def generate_filename(model_path, training_params, plot_mode, extension='png'):
-#     """
-#     Generate descriptive filename with parameters and mode.
-    
-#     Args:
-#         model_path (str): Path to model file
-#         training_params (dict): Extracted training parameters
-#         plot_mode (str): Plotting mode (animate, snapshot, final)
-#         extension (str): File extension
-        
-#     Returns:
-#         str: Generated filename
-#     """
-#     model_name = Path(model_path).stem
-    
-#     if training_params:
-#         param_suffix = f"_g{training_params['gamma_c']}_s{training_params['step_domain_fraction']}_r{training_params['rl_iterations_per_timestep']}_b{training_params['element_budget']}"
-#         filename = f"{model_name}{param_suffix}_{plot_mode}.{extension}"
-#     else:
-#         filename = f"{model_name}_{plot_mode}.{extension}"
-    
-#     return filename
-
 def generate_filename(model_path, training_params, plot_mode, extension, icase=None):
-    """
-    Generate descriptive filename for output files.
+    """Generate descriptive filename for output files.
     
-    For transferability testing, includes icase information.
+    Creates filenames that encode the icase, training parameters, and plot mode
+    for easy identification of transferability test results.
+    
+    Args:
+        model_path: Path to the model file (fallback for param extraction).
+        training_params: Dictionary of training parameters (gamma_c, step_domain_fraction,
+            rl_iterations_per_timestep, element_budget) or None.
+        plot_mode: String indicating plot type ('animate', 'snapshot', 'final').
+        extension: File extension without dot (e.g., 'png', 'mp4', 'pdf').
+        icase: Optional integer identifier for the initial condition case.
+    
+    Returns:
+        Filename string like "icase16_mexican_hat_gamma_50.0_step_0.1_rl_10_budget_30_snapshot.png".
     """
     # Get icase short name if provided
     if icase is not None:
@@ -249,14 +240,34 @@ def generate_filename(model_path, training_params, plot_mode, extension, icase=N
     return filename
 
 def create_parameter_title(training_params):
-    """Create formatted parameter string for titles with LaTeX support."""
+    """Create formatted parameter string for plot titles with LaTeX support.
+    
+    Args:
+        training_params: Dictionary containing gamma_c, step_domain_fraction,
+            rl_iterations_per_timestep, and element_budget, or None.
+    
+    Returns:
+        Formatted string suitable for matplotlib titles, using LaTeX for gamma_c.
+    """
     if training_params:
         return f"Training Parameters: $\\gamma_c$={training_params['gamma_c']}, step={training_params['step_domain_fraction']}, rl_iter={training_params['rl_iterations_per_timestep']}, budget={training_params['element_budget']}"
     else:
         return "Training Parameters: Unknown"
 
 def create_simulation_config_title(solver, initial_refinement=None, element_budget=None):
-    """Create formatted simulation configuration string for titles."""
+    """Create formatted simulation configuration string for plot titles.
+    
+    Args:
+        solver: DGWaveSolverEvaluation instance with simulation parameters.
+        initial_refinement: Optional override for initial refinement level.
+            If None, attempts to read from solver.
+        element_budget: Optional override for element budget.
+            If None, attempts to read from solver.
+    
+    Returns:
+        Formatted string describing initial refinement, element budget,
+        and max refinement level.
+    """
     try:
         # Use passed parameters if available, otherwise try to get from solver
         initial_ref = initial_refinement if initial_refinement is not None else (
@@ -287,23 +298,18 @@ def create_animation(times, solutions, grids, coords, solver, training_params,
         include_exact (bool): Whether to include exact solution
         output_dir (str): Directory to save animation
         model_path (str): Path to model file
+        initial_refinement (int): Initial refinement level for title display
+        element_budget (int): Element budget for title display
         
     Returns:
         str: Path to saved animation file
     """
     # Set up plot
     plt.rcParams['animation.html'] = 'jshtml'
-    # plt.style.use('ggplot')
     plt.style.use('seaborn-v0_8-dark-palette')
     
     fig, ax = plt.subplots(figsize=(12, 8))
     
-    # # Create title
-    # param_str = create_parameter_title(training_params)
-    # sim_config_str = create_simulation_config_title(solver, initial_refinement, element_budget)
-    # title = f'Model Evaluation Animation\n{param_str}\n{sim_config_str}'
-    # fig.suptitle(title, fontsize=14, fontweight='bold')
-
     # Create title with icase information
     param_str = create_parameter_title(training_params)
     sim_config_str = create_simulation_config_title(solver, initial_refinement, element_budget)
@@ -311,7 +317,6 @@ def create_animation(times, solutions, grids, coords, solver, training_params,
     title = f'Transferability Test: {get_icase_config(solver.icase)["name"]}\n{param_str}\n{sim_config_str}'
     
     ax.set_xlim([-1, 1])
-    # ax.set_ylim([-1.1, 1.2])
     # Dynamic y-axis limits based on icase
     icase_config = get_icase_config(solver.icase)
     ax.set_ylim(icase_config['ylim'])
@@ -341,7 +346,6 @@ def create_animation(times, solutions, grids, coords, solver, training_params,
     # Add vertical lines for element boundaries
     boundary_lines = []
     for x in grids[0]:
-        # boundary_lines.append(ax.axvline(x, color='darkmagenta', linestyle=':', alpha=0.7, linewidth=1))
         boundary_lines.append(ax.axvline(x, color='darkmagenta', linestyle='-', linewidth=1, alpha=0.8))
     
     ax.legend()
@@ -365,11 +369,7 @@ def create_animation(times, solutions, grids, coords, solver, training_params,
         boundary_lines.clear()
         
         for x in grids[frame]:
-            # boundary_lines.append(ax.axvline(x, color='gray', linestyle=':', alpha=0.7, linewidth=1))
             boundary_lines.append(ax.axvline(x, color='darkmagenta', linestyle=':', alpha=0.7, linewidth=1))
-        
-        # Update tick marks
-        # ax.set_xticks(grids[frame])
         
         # Update text
         frame_text.set_text(f'Frame: {frame}/{len(solutions)-1}')
@@ -382,14 +382,12 @@ def create_animation(times, solutions, grids, coords, solver, training_params,
         fig=fig,
         func=update_data,
         frames=len(solutions),
-        # interval=50,  # 50ms between frames
         interval=12,
         blit=False
     )
     
     # Save animation
     if output_dir and model_path:
-        # filename = generate_filename(model_path, training_params, 'animate', 'mp4')
         filename = generate_filename(model_path, training_params, 'animate', 'mp4', icase=solver.icase)
         animation_path = os.path.join(output_dir, filename)
         
@@ -422,6 +420,8 @@ def create_snapshot(times, solutions, grids, coords, solver, training_params,
         output_dir (str): Directory to save plot
         model_path (str): Path to model file
         n_snapshots (int): Number of snapshot timesteps
+        initial_refinement (int): Initial refinement level for title display
+        element_budget (int): Element budget for title display
         
     Returns:
         str: Path to saved plot file
@@ -438,12 +438,6 @@ def create_snapshot(times, solutions, grids, coords, solver, training_params,
     if n_snapshots == 1:
         axes = [axes]  # Ensure axes is always a list
     
-    # # Create title
-    # param_str = create_parameter_title(training_params)
-    # sim_config_str = create_simulation_config_title(solver, initial_refinement, element_budget)
-    # title = f'Model Evaluation Animation\n{param_str}\n{sim_config_str}'
-    # fig.suptitle(title, fontsize=14, fontweight='bold')
-
     # Create title with icase information
     param_str = create_parameter_title(training_params)
     sim_config_str = create_simulation_config_title(solver, initial_refinement, element_budget)
@@ -475,14 +469,11 @@ def create_snapshot(times, solutions, grids, coords, solver, training_params,
         
         # Set up subplot
         ax.set_xlim([-1, 1])
-        # ax.set_ylim([-0.1, 1.2])
         ax.set_ylim(icase_config['ylim'])
         ax.set_xlabel('Domain Position')
         ax.set_ylabel('Solution Value')
-        # ax.set_title(f'Time = {times[frame_idx]:.3f}, Elements = {len(grids[frame_idx])-1}')
         # ENHANCED TITLE WITH LEVEL INFO 
         title = f'Time = {times[frame_idx]:.3f}, Elements = {len(grids[frame_idx])-1}\n'
-        # title += f'Max Level = {current_max_level} (set: {solver.max_level}), Levels: {level_str}'
         ax.set_title(title, fontsize=10)
         ax.grid(True, alpha=0.3)
         
@@ -494,7 +485,6 @@ def create_snapshot(times, solutions, grids, coords, solver, training_params,
     
     # Save plot
     if output_dir and model_path:
-        # filename = generate_filename(model_path, training_params, 'snapshot', 'png')
         filename = generate_filename(model_path, training_params, 'snapshot', 'png', icase=solver.icase)
         plot_path = os.path.join(output_dir, filename)
         
@@ -525,6 +515,8 @@ def create_final_plot(solver, results, training_params, include_exact=True,
         include_exact (bool): Whether to include exact solution
         output_dir (str): Directory to save plot
         model_path (str): Path to model file
+        initial_refinement (int): Initial refinement level for title display
+        element_budget (int): Element budget for title display
         
     Returns:
         str: Path to saved plot file
@@ -535,12 +527,6 @@ def create_final_plot(solver, results, training_params, include_exact=True,
     # Create figure
     fig, ax = plt.subplots(figsize=(12, 8))
     
-    # Create title
-    # param_str = create_parameter_title(training_params)
-    # sim_config_str = create_simulation_config_title(solver, initial_refinement, element_budget)
-    # title = f'Model Evaluation Animation\n{param_str}\n{sim_config_str}'
-    # fig.suptitle(title, fontsize=14, fontweight='bold')
-
     param_str = create_parameter_title(training_params)
     sim_config_str = create_simulation_config_title(solver, initial_refinement, element_budget)
     icase_config = get_icase_config(solver.icase)
@@ -560,7 +546,6 @@ def create_final_plot(solver, results, training_params, include_exact=True,
     
     # Set up plot
     ax.set_xlim([-1, 1])
-    # ax.set_ylim([-0.1, 1.2])
     ax.set_ylim(icase_config['ylim'])
     ax.set_xlabel('Domain Position')
     ax.set_ylabel('Solution Value')
@@ -593,7 +578,6 @@ Mean Error: {np.mean(pointwise_error):.6e}"""
     
     # Save plot
     if output_dir and model_path:
-        # filename = generate_filename(model_path, training_params, 'final', 'png')
         filename = generate_filename(model_path, training_params, 'final', 'png', icase=solver.icase)
         plot_path = os.path.join(output_dir, filename)
         
@@ -630,9 +614,21 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
         include_exact (bool): Whether to include exact solution in plots
         verbose (bool): Whether to print detailed logs
         output_dir (str): Directory to save plots
+        initial_refinement (int): Initial uniform refinement level to apply
+            before simulation starts. If 0, uses base mesh.
         
     Returns:
-        dict: Comprehensive evaluation results
+        dict: Comprehensive evaluation results including:
+            - final_l2_error: Mesh-dependent L2 error at final time
+            - grid_normalized_l2_error: Grid-normalized L2 error
+            - total_cost: Sum of element counts across all timesteps
+            - final_elements: Number of active elements at final time
+            - total_adaptations: Total adaptation operations performed
+            - icase: Test case identifier used
+            - icase_name: Human-readable name of test case
+            - training_parameters: Extracted training parameters dict
+            - simulation_metrics: Detailed simulation statistics dict
+            - plot_path: Path to saved plot (if plot_mode specified)
     """
     
     # Validate model path
@@ -772,7 +768,6 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
     import math
     number_of_timesteps = math.ceil(time_final / solver.dt)
     no_amr_baseline_cost = actual_initial_elements * number_of_timesteps
-    # no_amr_baseline_cost = actual_initial_elements * step_count
     cost_ratio = total_cost / no_amr_baseline_cost
 
     # Validation check - cost ratio should never exceed 1.0
@@ -845,7 +840,11 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
     return results
 
 def main():
-    """Main function with argument parsing for command line usage"""
+    """Parse command line arguments and run transferability evaluation.
+    
+    Provides CLI interface for evaluating a single model on a specified
+    initial condition (icase), with options for plotting and JSON output.
+    """
     parser = argparse.ArgumentParser(description='Evaluate a single RL model on 1D wave equation')
     
     # Required arguments
@@ -901,17 +900,6 @@ def main():
         initial_refinement=args.initial_refinement
     )
     
-    # # Print summary
-    # print(f"\n=== EVALUATION SUMMARY ===")
-    # if 'training_parameters' in results and results['training_parameters']:
-    #     param_str = create_parameter_title(results['training_parameters'])
-    #     print(f"Training Parameters: {param_str}")
-
-    # print(f"Model: {args.model_path}")
-    # print(f"Final L2 Error: {results['final_l2_error']:.6e}")
-    # print(f"Total Cost: {results['total_cost']}")
-    # print(f"Final Elements: {results['final_elements']}")
-    # print(f"Total Adaptations: {results['total_adaptations']}")
     # Print summary
     print(f"\n=== TRANSFERABILITY EVALUATION SUMMARY ===")
     icase_config = get_icase_config(args.icase)
@@ -936,4 +924,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

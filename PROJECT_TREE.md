@@ -1,6 +1,6 @@
 # Project Tree
 
-Generated: 2026-01-20 18:37:57
+Generated: 2026-01-30 08:51:06
 Project: drl-amr-1d
 Included: all files
 Data dirs: collapsed
@@ -17,6 +17,8 @@ drl-amr-1d/
 │   │   ├── pareto_key_models_analyzer.py
 │   │   └── single_model_runner.py
 │   ├── transferability/
+│   │   ├── animations/ [2 dirs, 0 files]
+│   │   ├── results/ [0 dirs, 0 files]
 │   │   ├── collect_results.py
 │   │   ├── generate_job_list.py
 │   │   ├── transferability_array.slurm
@@ -30,8 +32,7 @@ drl-amr-1d/
 │   │       └── base_template.yaml
 │   └── run_experiments_mixed_gpu.py
 ├── notebooks/
-│   ├── amr_plot_1768860862.svg
-│   └── interactive_amr_testing.ipynb
+│   └── interactive_amr_testing_notebook.ipynb
 ├── numerical/
 │   ├── amr/
 │   │   ├── __init__.py
@@ -45,28 +46,43 @@ drl-amr-1d/
 │   ├── dg/
 │   │   ├── __init__.py
 │   │   ├── basis.py
-│   │   └── matrices.py
+│   │   ├── matrices.py
+│   │   └── matrices_archive.py
 │   ├── environments/
 │   │   ├── __init__.py
-│   │   └── dg_amr_env_mixed.py
+│   │   └── dg_amr_env.py
 │   ├── grid/
 │   │   ├── __init__.py
 │   │   └── mesh.py
 │   ├── solvers/
 │   │   ├── __init__.py
-│   │   ├── dg_wave_solver_mixed_clean.py
+│   │   ├── dg_advection_solver.py
 │   │   └── utils.py
 │   └── __init__.py
 ├── slurm_scripts/
 │   └── batch_model_evaluation_template.slurm
 ├── tests/
-│   └── amr/
-│       ├── test_adapt.py
-│       └── test_forest.py
+│   ├── amr/
+│   │   ├── test_adapt.py
+│   │   └── test_forest.py
+│   ├── analysis/
+│   │   ├── transferability/
+│   │   │   ├── __init__.py
+│   │   │   └── test_transferability.py
+│   │   ├── test_comprehensive_analyzer.py
+│   │   ├── test_key_models_analyzer.py
+│   │   ├── test_pareto_key_models_analyzer.py
+│   │   └── test_single_model_runner.py
+│   ├── dg/
+│   │   └── test_matrices.py
+│   ├── environments/
+│   │   ├── __init__.py
+│   │   └── test_dg_amr_env.py
+│   └── solvers/
+│       └── test_dg_advection_solver.py
 ├── tools/
 │   └── tree_gen.py
 ├── 1D_DRL_AMR_COMPLETE_WORKFLOW.md
-├── BORAH_PROJECT_TREE.md
 ├── create_batch_evaluation_jobs.py
 ├── create_data_export_scripts.py
 ├── PROJECT_TREE.md
