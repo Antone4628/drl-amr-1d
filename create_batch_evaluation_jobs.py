@@ -9,6 +9,11 @@ models from a parameter sweep using a specific evaluation configuration.
 This script is used in the batch evaluation phase of the workflow, after
 training is complete and models have been transferred to the analysis directory.
 
+Key Features:
+    - Dynamic project root detection for portability
+    - Validates model directories exist before generating jobs
+    - Supports multiple evaluation configurations in a single run
+
 Usage:
     # Generate job for a single configuration
     python create_batch_evaluation_jobs.py 4,80,4 --sweep-name session4_100k_uniform
@@ -28,6 +33,9 @@ Configuration Format:
 
 import os
 import sys
+
+# Dynamically determine project root from script location
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
 def validate_sweep_models(sweep_name):
@@ -68,7 +76,8 @@ def create_slurm_job(refinement_level, element_budget, max_level, sweep_name, ic
     """Create a SLURM job file for a specific evaluation configuration.
     
     Reads the batch evaluation template and substitutes placeholders with
-    the specified configuration values.
+    the specified configuration values, including the dynamically determined
+    project root path.
     
     Args:
         refinement_level: Initial uniform refinement level to apply before evaluation.
@@ -88,6 +97,7 @@ def create_slurm_job(refinement_level, element_budget, max_level, sweep_name, ic
         - MAX_LEVEL
         - SWEEP_NAME
         - ICASE
+        - PROJECT_ROOT_PLACEHOLDER
     """
     # Read template
     template_file = 'slurm_scripts/batch_model_evaluation_template.slurm'
@@ -100,6 +110,7 @@ def create_slurm_job(refinement_level, element_budget, max_level, sweep_name, ic
     job_content = job_content.replace('MAX_LEVEL', str(max_level))
     job_content = job_content.replace('SWEEP_NAME', sweep_name)
     job_content = job_content.replace('ICASE', str(icase))
+    job_content = job_content.replace('PROJECT_ROOT_PLACEHOLDER', PROJECT_ROOT)
     
     # Write job file
     job_file = f'slurm_scripts/batch_model_evaluation_ref_{refinement_level}_budget_{element_budget}.slurm'

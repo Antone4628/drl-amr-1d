@@ -21,6 +21,7 @@ Key Features:
     - Custom sweep naming for organized results
     - Dry-run mode to preview without creating files
     - Enhanced callback for structured data export (JSON/CSV)
+    - Dynamic project root detection for portability
 
 Usage:
     # Default: conditional timesteps (100k for gamma_c=25.0, 50k for others)
@@ -40,6 +41,9 @@ import yaml
 import os
 import argparse
 from datetime import datetime
+
+# Dynamically determine project root from script location
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # Parameter space definition
 PARAMETER_SPACE = {
@@ -183,6 +187,7 @@ def create_slurm_script_template():
         - {sweep_name}: Name of the parameter sweep
         - {output_dir}: Base output directory
         - {icase}: Test case identifier
+        - {project_root}: Absolute path to project root directory
     
     Returns:
         str: SLURM script template with format placeholders.
@@ -266,7 +271,7 @@ sed -i "s/{{{{ICASE}}}}/$ICASE/g" "$CURRENT_CONFIG"
 echo "✓ Configuration file prepared with $TOTAL_TIMESTEPS timesteps"
 
 # Change to project directory
-cd /bsuhome/antonechacartegu/projects/drl-amr-1d
+cd {project_root}
 
 # Run training with no-timestamp flag for predictable directory structure
 echo "Starting training with enhanced_callback_data..."
@@ -380,7 +385,8 @@ def generate_parameter_cases(group_combinations):
 def create_group_slurm_script(group, args, timestamp, sweep_name):
     """Create a complete SLURM script for a specific parameter group.
     
-    Fills the template with group-specific parameters and timestep logic.
+    Fills the template with group-specific parameters, timestep logic,
+    and the dynamically determined project root path.
     
     Args:
         group: Group dictionary with group_id, group_name, and combinations.
@@ -420,7 +426,8 @@ fi'''
         timestamp=timestamp,
         sweep_name=sweep_name,
         output_dir=args.output_dir,
-        icase=args.icase
+        icase=args.icase,
+        project_root=PROJECT_ROOT
     )
     
     return script_content

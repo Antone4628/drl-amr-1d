@@ -16,7 +16,7 @@ source ~/anaconda3/etc/profile.d/conda.sh
 conda activate rl-amr
 
 # Navigate to project directory
-cd /bsuhome/antonechacartegu/projects/drl-amr-1d
+cd PROJECT_ROOT_PLACEHOLDER
 
 # Run single model evaluation
 # python analysis/model_performance/evaluate_single_model_by_index.py $SLURM_ARRAY_TASK_ID session3_100k_uniform REFINEMENT_LEVEL ELEMENT_BUDGET
