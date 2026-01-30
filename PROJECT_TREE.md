@@ -1,6 +1,6 @@
 # Project Tree
 
-Generated: 2026-01-30 08:51:06
+Generated: 2026-01-30 09:23:18
 Project: drl-amr-1d
 Included: all files
 Data dirs: collapsed
@@ -46,8 +46,7 @@ drl-amr-1d/
 │   ├── dg/
 │   │   ├── __init__.py
 │   │   ├── basis.py
-│   │   ├── matrices.py
-│   │   └── matrices_archive.py
+│   │   └── matrices.py
 │   ├── environments/
 │   │   ├── __init__.py
 │   │   └── dg_amr_env.py

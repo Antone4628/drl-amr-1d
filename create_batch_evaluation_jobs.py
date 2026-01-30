@@ -1,13 +1,51 @@
 #!/usr/bin/env python3
 """
-Generate SLURM batch evaluation jobs for different initial refinement levels and element budgets.
+Generate SLURM Batch Evaluation Jobs
+
+Creates SLURM job files for evaluating trained RL models across different
+initial refinement levels and element budgets. Each job evaluates all 81
+models from a parameter sweep using a specific evaluation configuration.
+
+This script is used in the batch evaluation phase of the workflow, after
+training is complete and models have been transferred to the analysis directory.
+
+Usage:
+    # Generate job for a single configuration
+    python create_batch_evaluation_jobs.py 4,80,4 --sweep-name session4_100k_uniform
+    
+    # Generate multiple configurations
+    python create_batch_evaluation_jobs.py 4,80,4 5,150,5 --sweep-name session4_100k_uniform
+    
+    # Specify test case (icase)
+    python create_batch_evaluation_jobs.py 5,100,5 --sweep-name session5_mexican_hat_200k --icase 16
+
+Configuration Format:
+    refinement_level,element_budget,max_level
+    - refinement_level: Initial uniform refinement (0=base mesh, higher=more elements)
+    - element_budget: Maximum elements allowed during evaluation
+    - max_level: Maximum refinement level permitted
 """
 
 import os
 import sys
 
+
 def validate_sweep_models(sweep_name):
-    """Validate that the sweep models directory exists and contains expected models."""
+    """Validate that the sweep models directory exists and contains expected models.
+    
+    Checks the analysis/data/models directory for the specified sweep and verifies
+    that all 81 expected model directories are present.
+    
+    Args:
+        sweep_name: Name of the parameter sweep (e.g., 'session4_100k_uniform').
+    
+    Raises:
+        SystemExit: If the models directory does not exist.
+    
+    Note:
+        Prints a warning but continues if fewer than 81 models are found,
+        as partial evaluation may still be useful.
+    """
     models_dir = os.path.join('analysis', 'data', 'models', sweep_name)
     
     if not os.path.exists(models_dir):
@@ -25,30 +63,32 @@ def validate_sweep_models(sweep_name):
     else:
         print(f"✅ Validated {len(model_dirs)} model directories in {sweep_name}")
 
-# def create_slurm_job(refinement_level, element_budget, max_level):
-#     """Create a SLURM job file for specific refinement level and element budget."""
-    
-#     # Read template
-#     template_file = 'slurm_scripts/batch_model_evaluation_template.slurm'
-#     with open(template_file, 'r') as f:
-#         template = f.read()
-    
-#     # Replace placeholders
-#     job_content = template.replace('REFINEMENT_LEVEL', str(refinement_level))
-#     job_content = job_content.replace('ELEMENT_BUDGET', str(element_budget))
-#     job_content = job_content.replace('MAX_LEVEL', str(max_level))
-    
-#     # Write job file
-#     job_file = f'slurm_scripts/batch_model_evaluation_ref_{refinement_level}_budget_{element_budget}.slurm'
-#     with open(job_file, 'w') as f:
-#         f.write(job_content)
-    
-#     print(f"Created {job_file}")
-#     return job_file
 
 def create_slurm_job(refinement_level, element_budget, max_level, sweep_name, icase=1):
-    """Create a SLURM job file for specific refinement level and element budget."""
+    """Create a SLURM job file for a specific evaluation configuration.
     
+    Reads the batch evaluation template and substitutes placeholders with
+    the specified configuration values.
+    
+    Args:
+        refinement_level: Initial uniform refinement level to apply before evaluation.
+        element_budget: Maximum number of elements allowed during evaluation.
+        max_level: Maximum refinement level permitted during adaptation.
+        sweep_name: Name of the parameter sweep containing trained models.
+        icase: Test case identifier for initial condition (default: 1 for Gaussian).
+    
+    Returns:
+        Path to the created SLURM job file.
+    
+    Note:
+        The template file must exist at 'slurm_scripts/batch_model_evaluation_template.slurm'
+        and contain the following placeholders:
+        - REFINEMENT_LEVEL
+        - ELEMENT_BUDGET
+        - MAX_LEVEL
+        - SWEEP_NAME
+        - ICASE
+    """
     # Read template
     template_file = 'slurm_scripts/batch_model_evaluation_template.slurm'
     with open(template_file, 'r') as f:
@@ -69,7 +109,13 @@ def create_slurm_job(refinement_level, element_budget, max_level, sweep_name, ic
     print(f"Created {job_file} for sweep: {sweep_name}")
     return job_file
 
+
 def main():
+    """Parse arguments and generate SLURM batch evaluation job files.
+    
+    Validates that models exist, analyzes configurations for budget constraints,
+    creates SLURM job files, and prints submission instructions.
+    """
     import argparse
     
     parser = argparse.ArgumentParser(
@@ -132,38 +178,8 @@ Examples:
     
     job_files = []
     for refinement_level, element_budget, max_level in configs: 
-        # job_file = create_slurm_job(refinement_level, element_budget, max_level, sweep_name)
         job_file = create_slurm_job(refinement_level, element_budget, max_level, sweep_name, args.icase)
         job_files.append((job_file, refinement_level, element_budget, max_level))
-    # if len(sys.argv) < 2:
-    #     print("Usage: python create_batch_evaluation_jobs.py <config1> [config2] ...")
-    #     print("Where each config is: refinement_level,element_budget,max_level")
-    #     print("Example: python create_batch_evaluation_jobs.py 0,50 1,60 2,70 4,80")
-    #     sys.exit(1)
-    
-    # configs = []
-    # for arg in sys.argv[1:]:
-    #     try:
-    #         refinement_level, element_budget, max_level = map(int, arg.split(','))
-    #         # configs.append((refinement_level, element_budget))
-    #         configs.append((refinement_level, element_budget, max_level)) 
-    #     except ValueError:
-    #         print(f"Error: Invalid config '{arg}'. Use format: refinement_level,element_budget")
-    #         sys.exit(1)
-    
-    # Calculate expected initial elements for each config
-    # print("Configuration analysis:")
-    # for refinement_level, element_budget, max_level in configs:
-    #     base_elements = 4
-    #     expected_initial = base_elements * (2 ** refinement_level)
-    #     status = "✓ OK" if expected_initial < element_budget else "⚠ OVER BUDGET"
-    #     print(f"  ref_{refinement_level}, budget_{element_budget}, maxlvl_{max_level}: {expected_initial} initial elements {status}")
-    # print()
-    
-    # job_files = []
-    # for refinement_level, element_budget, max_level in configs: 
-    #     job_file = create_slurm_job(refinement_level, element_budget, max_level)
-    #     job_files.append((job_file, refinement_level, element_budget, max_level))
     
     print(f"\nCreated {len(job_files)} job files.")
     print("\nTo submit jobs:")
@@ -173,6 +189,7 @@ Examples:
     print(f"\nResults will be saved as:")
     for _, ref, budget, max_lvl in job_files:
         print(f"  model_results_ref{ref}_budget{budget}_max{max_lvl}.csv")
+
 
 if __name__ == "__main__":
     main()

@@ -1,19 +1,39 @@
 #!/usr/bin/env python3
 """
-Generate Enhanced SLURM Scripts for Data Export Parameter Sweep
-Creates 9 SLURM array job scripts with configurable timesteps and enhanced_callback_data.
+Generate SLURM Scripts for Parameter Sweep Training
 
-Session 3 Enhancement: CLI Parameterization
-- Configurable timesteps (uniform or conditional)
-- Custom sweep naming
-- Flexible output directories
-- Backward compatibility maintained
+Creates 9 SLURM array job scripts for training 81 RL models across the full
+parameter space. Each script handles one "group" (9 parameter combinations)
+using SLURM array jobs for parallel execution.
 
-Usage: 
-  python3 create_data_export_scripts.py                    # Default: conditional timesteps
-  python3 create_data_export_scripts.py --timesteps 100000 --uniform-timesteps  # 100k uniform
-  python3 create_data_export_scripts.py --sweep-name my_custom_sweep
-  python3 create_data_export_scripts.py --help
+Parameter Space (81 total combinations):
+    - gamma_c: [25.0, 50.0, 100.0] - Reward scaling factor
+    - step_domain_fraction: [0.025, 0.05, 0.1] - Wave propagation step size
+    - rl_iterations_per_timestep: [10, 25, 40] - Adaptation frequency
+    - element_budget: [25, 30, 40] - Resource constraint
+
+Grouping Strategy:
+    Groups are organized by (gamma_c × step_domain_fraction), yielding 9 groups
+    of 9 combinations each. This allows efficient SLURM array job submission.
+
+Key Features:
+    - Configurable timesteps (uniform or conditional based on gamma_c)
+    - Custom sweep naming for organized results
+    - Dry-run mode to preview without creating files
+    - Enhanced callback for structured data export (JSON/CSV)
+
+Usage:
+    # Default: conditional timesteps (100k for gamma_c=25.0, 50k for others)
+    python create_data_export_scripts.py --sweep-name my_sweep
+    
+    # Uniform 100k timesteps for all combinations
+    python create_data_export_scripts.py --timesteps 100000 --uniform-timesteps --sweep-name my_sweep
+    
+    # Preview without creating files
+    python create_data_export_scripts.py --sweep-name my_sweep --dry-run
+    
+    # Train on Mexican hat waveform (icase 16)
+    python create_data_export_scripts.py --sweep-name mexican_hat_sweep --icase 16
 """
 
 import yaml
@@ -21,7 +41,7 @@ import os
 import argparse
 from datetime import datetime
 
-# Parameter space definition (same as before)
+# Parameter space definition
 PARAMETER_SPACE = {
     'gamma_c': [25.0, 50.0, 100.0],
     'step_domain_fraction': [0.025, 0.05, 0.1],
@@ -29,8 +49,19 @@ PARAMETER_SPACE = {
     'element_budget': [25, 30, 40]
 }
 
+
 def parse_arguments():
-    """Parse command line arguments for enhanced functionality."""
+    """Parse command line arguments for script generation.
+    
+    Returns:
+        argparse.Namespace: Parsed arguments with the following attributes:
+            - timesteps: Total timesteps for training (default: 100000)
+            - uniform_timesteps: If True, use same timesteps for all combinations
+            - sweep_name: Custom sweep name (auto-generated if None)
+            - output_dir: Base output directory (default: 'results')
+            - dry_run: If True, preview without creating files
+            - icase: Test case identifier (default: 1 for Gaussian)
+    """
     parser = argparse.ArgumentParser(
         description="Generate SLURM scripts for AMR parameter sweep with configurable options",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -92,8 +123,20 @@ Examples:
     
     return parser.parse_args()
 
+
 def generate_all_combinations():
-    """Generate all 81 parameter combinations organized into 9 groups."""
+    """Generate all 81 parameter combinations organized into 9 groups.
+    
+    Groups are organized by (gamma_c × step_domain_fraction) pairs,
+    with each group containing 9 combinations varying rl_iterations
+    and element_budget.
+    
+    Returns:
+        list: List of group dictionaries, each containing:
+            - group_id: Integer 1-9
+            - group_name: String like "gamma_25.0_step_0.025"
+            - combinations: List of 9 parameter combination dicts
+    """
     combinations = []
     
     for gamma_c in PARAMETER_SPACE['gamma_c']:
@@ -127,8 +170,23 @@ def generate_all_combinations():
     
     return groups
 
+
 def create_slurm_script_template():
-    """Create the enhanced SLURM script template with configurable timesteps."""
+    """Create the SLURM script template with configurable placeholders.
+    
+    The template includes placeholders for:
+        - {group_id}: SLURM job group identifier
+        - {group_name}: Human-readable group name
+        - {parameter_cases}: Case statement for array job parameters
+        - {timestep_logic}: Conditional or uniform timestep assignment
+        - {timestamp}: Generation timestamp
+        - {sweep_name}: Name of the parameter sweep
+        - {output_dir}: Base output directory
+        - {icase}: Test case identifier
+    
+    Returns:
+        str: SLURM script template with format placeholders.
+    """
     
     template = '''#!/bin/bash
 #SBATCH --job-name=param_sweep_data_group_{group_id:02d}
@@ -292,8 +350,19 @@ echo "=================================================="
     
     return template
 
+
 def generate_parameter_cases(group_combinations):
-    """Generate the parameter case statements for the SLURM script."""
+    """Generate the bash case statements for SLURM array job parameters.
+    
+    Creates a case block that maps SLURM_ARRAY_TASK_ID (0-8) to the
+    corresponding parameter values for each combination in the group.
+    
+    Args:
+        group_combinations: List of 9 parameter combination dictionaries.
+    
+    Returns:
+        str: Bash case statement block for parameter assignment.
+    """
     cases = []
     
     for i, combo in enumerate(group_combinations):
@@ -307,8 +376,21 @@ def generate_parameter_cases(group_combinations):
     
     return '\n'.join(cases)
 
+
 def create_group_slurm_script(group, args, timestamp, sweep_name):
-    """Create SLURM script for a specific group."""
+    """Create a complete SLURM script for a specific parameter group.
+    
+    Fills the template with group-specific parameters and timestep logic.
+    
+    Args:
+        group: Group dictionary with group_id, group_name, and combinations.
+        args: Parsed command line arguments.
+        timestamp: Generation timestamp string.
+        sweep_name: Name of the parameter sweep.
+    
+    Returns:
+        str: Complete SLURM script content ready to write to file.
+    """
     
     # Generate timestep logic based on CLI arguments
     if args.uniform_timesteps:
@@ -343,8 +425,22 @@ fi'''
     
     return script_content
 
+
 def save_slurm_scripts(groups, args):
-    """Save all SLURM scripts."""
+    """Save all SLURM scripts to the slurm_scripts directory.
+    
+    Creates the directory structure and writes one script file per group.
+    
+    Args:
+        groups: List of group dictionaries from generate_all_combinations().
+        args: Parsed command line arguments.
+    
+    Returns:
+        tuple: (script_paths, timestamp, sweep_name)
+            - script_paths: List of created script file paths
+            - timestamp: Generation timestamp
+            - sweep_name: Final sweep name used
+    """
     
     # Create directories
     slurm_dir = "slurm_scripts/param_sweep_data"
@@ -395,8 +491,22 @@ def save_slurm_scripts(groups, args):
     
     return script_paths, timestamp, sweep_name
 
+
 def create_submission_script(groups, args, timestamp, sweep_name):
-    """Create master submission script."""
+    """Create the master submission script that submits all group jobs.
+    
+    Generates a bash script that submits all 9 group SLURM scripts
+    with appropriate delays between submissions.
+    
+    Args:
+        groups: List of group dictionaries.
+        args: Parsed command line arguments.
+        timestamp: Generation timestamp.
+        sweep_name: Name of the parameter sweep.
+    
+    Returns:
+        str: Path to the created submission script.
+    """
     
     timestep_description = f"{args.timesteps//1000}k uniform" if args.uniform_timesteps else "conditional (100k/50k)"
     
@@ -502,8 +612,18 @@ echo "  PDF reports: Comprehensive training reports as before"
     
     return submission_path
 
+
 def print_summary(groups, script_paths, submission_path, args, timestamp, sweep_name):
-    """Print creation summary."""
+    """Print a summary of all created scripts and configuration.
+    
+    Args:
+        groups: List of group dictionaries.
+        script_paths: List of created script file paths.
+        submission_path: Path to master submission script.
+        args: Parsed command line arguments.
+        timestamp: Generation timestamp.
+        sweep_name: Name of the parameter sweep.
+    """
     print("\n" + "="*80)
     print("ENHANCED DATA EXPORT PARAMETER SWEEP - GENERATION SUMMARY")
     print("="*80)
@@ -549,8 +669,13 @@ def print_summary(groups, script_paths, submission_path, args, timestamp, sweep_
     print(f"  • gamma_X_step_Y_rl_Z_budget_W_Nk_training_metrics.json")
     print(f"  • gamma_X_step_Y_rl_Z_budget_W_Nk_training_summary.csv")
 
+
 def main():
-    """Main execution function."""
+    """Main execution function for SLURM script generation.
+    
+    Parses arguments, generates parameter combinations, creates all SLURM
+    scripts and the master submission script, then prints a summary.
+    """
     args = parse_arguments()
     
     print("Enhanced Data Export Parameter Sweep Scripts")
@@ -583,6 +708,7 @@ def main():
     print(f"  2. Submit all jobs: bash {submission_path}")
     print(f"  3. Monitor progress: python3 monitor_param_sweep.py")
     print(f"  4. Analyze structured data when complete!")
+
 
 if __name__ == "__main__":
     main()

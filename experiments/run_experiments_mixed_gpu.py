@@ -1,6 +1,36 @@
 #!/usr/bin/env python
 """
-Script to run multiple AMR reinforcement learning experiments with different gamma_c values.
+DRL-AMR Training Script
+
+Main entry point for training reinforcement learning agents to perform adaptive
+mesh refinement on the 1D wave equation. Supports multiple RL algorithms (A2C, PPO, DQN)
+with configurable hyperparameters via YAML configuration files.
+
+Key Features:
+    - GPU/CPU device selection with automatic detection
+    - YAML-based configuration for all parameters
+    - TensorBoard logging for training visualization
+    - Checkpoint saving and final model export
+    - Basic post-training evaluation
+    - Support for batch parameter sweeps (--no-timestamp mode)
+
+Configuration Sections:
+    - environment: RL environment settings (gamma_c, element_budget, etc.)
+    - training: Algorithm selection and hyperparameters
+    - solver: DG solver parameters (polynomial order, mesh, CFL)
+
+Usage:
+    # Single experiment with config file
+    python run_experiments_mixed_gpu.py --config experiments/configs/my_config.yaml
+    
+    # Run all configs in a directory
+    python run_experiments_mixed_gpu.py --all --config-dir experiments/configs/
+    
+    # Force CPU usage
+    python run_experiments_mixed_gpu.py --config my_config.yaml --force-cpu
+    
+    # For automated sweeps (predictable directory structure)
+    python run_experiments_mixed_gpu.py --config my_config.yaml --results-dir output/ --no-timestamp
 """
 
 import os
@@ -20,9 +50,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(
 sys.path.append(PROJECT_ROOT)
 
 
-
 from numerical.solvers.dg_advection_solver import DGAdvectionSolver
-# from numerical.environments.dg_amr_env_mixed import DGAMREnv
 from numerical.environments.dg_amr_env import DGAMREnv
 from stable_baselines3 import A2C, PPO, DQN
 from stable_baselines3.common.monitor import Monitor
@@ -30,14 +58,19 @@ from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 import numpy as np
 import matplotlib.pyplot as plt
 
-# from numerical.callbacks.enhanced_callback_options import EnhancedMonitorCallback
-# from numerical.callbacks.enhanced_callback_mixed import EnhancedMonitorCallback
 from numerical.callbacks.enhanced_callback_data import EnhancedMonitorCallback
 from numerical.callbacks.simple_monitor_callback import SimpleMonitorCallback
 
 
 def check_gpu_availability():
-    """Check GPU availability and print device information."""
+    """Check GPU availability and print detailed device information.
+    
+    Queries PyTorch for CUDA availability and prints information about
+    all available GPUs including memory capacity.
+    
+    Returns:
+        bool: True if CUDA is available, False otherwise.
+    """
     print(f"\n{'='*50}")
     print("GPU AVAILABILITY CHECK")
     print(f"{'='*50}")
@@ -66,7 +99,14 @@ def check_gpu_availability():
 
 
 def get_device(force_cpu=False):
-    """Get the appropriate device for training."""
+    """Determine the appropriate compute device for training.
+    
+    Args:
+        force_cpu: If True, use CPU even if GPU is available.
+    
+    Returns:
+        str: Device string ('cuda' or 'cpu') for PyTorch.
+    """
     if force_cpu:
         print("Forcing CPU usage as requested")
         return 'cpu'
@@ -82,7 +122,20 @@ def get_device(force_cpu=False):
 
 
 def load_config(config_path):
-    """Load configuration from YAML file"""
+    """Load experiment configuration from a YAML file.
+    
+    Args:
+        config_path: Path to the YAML configuration file.
+    
+    Returns:
+        dict: Configuration dictionary with all experiment parameters.
+    
+    Raises:
+        FileNotFoundError: If the configuration file does not exist.
+    
+    Note:
+        Automatically converts 'initial_elements' to numpy array if present.
+    """
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
     
@@ -99,7 +152,19 @@ def load_config(config_path):
 def get_parameter(config, parameter_path, default=None):
     """
     Get a parameter from the config using dot notation.
-    Example: get_parameter(config, "solver.nop", 3)
+    
+    Args:
+        config: Configuration dictionary.
+        parameter_path: Dot-separated path to parameter (e.g., "solver.nop").
+        default: Value to return if parameter not found.
+    
+    Returns:
+        The parameter value, or default if not found.
+    
+    Example:
+        >>> config = {'solver': {'nop': 4}}
+        >>> get_parameter(config, "solver.nop", 3)
+        4
     """
     parts = parameter_path.split('.')
     current = config
@@ -113,7 +178,29 @@ def get_parameter(config, parameter_path, default=None):
 
 
 def run_experiment(config_path, results_dir=None, force_cpu=False, use_timestamp=True):
-    """Run a single experiment with the given configuration"""
+    """Run a single training experiment with the given configuration.
+    
+    This is the main training function that:
+    1. Loads configuration and sets up directories
+    2. Initializes the DG solver and RL environment
+    3. Creates the RL model with specified algorithm
+    4. Trains the model with callbacks for monitoring
+    5. Saves the final model and runs basic evaluation
+    
+    Args:
+        config_path: Path to the YAML configuration file.
+        results_dir: Base directory for results. If None, uses PROJECT_ROOT/experiments/results.
+        force_cpu: If True, force CPU usage even if GPU available.
+        use_timestamp: If True, create timestamped subdirectories. Set False for
+            automated sweeps to get predictable directory structure.
+    
+    Returns:
+        tuple: (log_dir, model) - Path to log directory and trained model.
+    
+    Note:
+        The function handles training errors gracefully, saving partial results
+        and performance metrics even if training is interrupted.
+    """
     # Check GPU availability first
     gpu_available = check_gpu_availability()
     device = get_device(force_cpu)
@@ -228,7 +315,6 @@ def run_experiment(config_path, results_dir=None, force_cpu=False, use_timestamp
         gamma_c=gamma_c,
         max_episode_steps=max_episode_steps,
         verbose = False,
-        # verbose = True,
         rl_iterations_per_timestep = rl_iterations_per_timestep,  # Use parameter from config
         min_rl_iterations = min_rl_iterations,
         max_rl_iterations = max_rl_iterations,  # Maximum number of RL iterations before time-stepping
@@ -391,7 +477,21 @@ Steps per hour: {steps_per_hour:,.0f}
 
 
 def evaluate_model(model, env, num_episodes=5, log_dir=None):
-    """Basic model evaluation."""
+    """Run basic evaluation of a trained model.
+    
+    Executes the trained policy deterministically for several episodes
+    and collects performance statistics.
+    
+    Args:
+        model: Trained Stable-Baselines3 model.
+        env: Gymnasium environment (should be the training environment).
+        num_episodes: Number of evaluation episodes to run.
+        log_dir: Directory to save evaluation results. If None, results
+            are only printed to console.
+    
+    Returns:
+        tuple: (mean_reward, std_reward) across evaluation episodes.
+    """
     rewards = []
     episode_lengths = []
     # Track time step related metrics
@@ -444,7 +544,23 @@ def evaluate_model(model, env, num_episodes=5, log_dir=None):
 
 
 def run_all_experiments(config_dir=None, results_dir=None, force_cpu=False, use_timestamp=True):
-    """Run experiments for all config files"""
+    """Run experiments for all configuration files in a directory.
+    
+    Iterates through all .yaml files in the config directory and runs
+    each experiment sequentially.
+    
+    Args:
+        config_dir: Directory containing YAML config files. If None, uses
+            PROJECT_ROOT/experiments/configs.
+        results_dir: Base directory for results. If None, uses
+            PROJECT_ROOT/experiments/results.
+        force_cpu: If True, force CPU usage for all experiments.
+        use_timestamp: If True, create timestamped subdirectories.
+    
+    Returns:
+        dict: Results dictionary mapping config filenames to outcomes,
+            including success status and log directory or error message.
+    """
     if config_dir is None:
         config_dir = os.path.join(PROJECT_ROOT, "experiments", "configs")
     
