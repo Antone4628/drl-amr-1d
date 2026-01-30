@@ -247,17 +247,152 @@ results/<sweep_name>/
 
 ## Individual Training Run
 
-*TODO: Document single training run workflow*
+Run a single model training with a custom configuration file.
 
 **Script:** `experiments/run_experiments_mixed_gpu.py`
 
-**CLI Arguments:**
-- `--config` — Path to YAML configuration file
-- `--results-dir` — Output directory
-- `--force-cpu` — Force CPU usage
-- `--no-timestamp` — Disable timestamp in output directory
+### CLI Arguments
 
-*Details to be added in future session*
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--config` | str | None | Path to single YAML config file |
+| `--all` | flag | False | Run all experiments in config directory |
+| `--config-dir` | str | None | Path to config directory (used with `--all`) |
+| `--results-dir` | str | "results" | Base output directory |
+| `--force-cpu` | flag | False | Force CPU usage even if GPU is available |
+| `--no-timestamp` | flag | False | Disable timestamp in directory structure (for automated sweeps) |
+
+### Example Usage
+
+**From project root:**
+```bash
+# Basic run (uses GPU if available)
+python experiments/run_experiments_mixed_gpu.py \
+    --config experiments/configs/my_config.yaml \
+    --results-dir results/my_experiment
+
+# Force CPU (useful on login nodes or for quick tests)
+python experiments/run_experiments_mixed_gpu.py \
+    --config experiments/configs/my_config.yaml \
+    --results-dir results/my_experiment \
+    --force-cpu
+
+# Run all configs in a directory
+python experiments/run_experiments_mixed_gpu.py \
+    --all \
+    --config-dir experiments/configs/my_sweep/ \
+    --results-dir results/my_sweep
+```
+
+### Configuration File Format
+
+Create a YAML file with the following structure:
+```yaml
+environment:
+  max_episode_steps: 200
+  element_budget: 30
+  gamma_c: 50.0
+  rl_iterations_per_timestep: 25
+  min_rl_iterations: 25
+  max_rl_iterations: 25
+  max_consecutive_no_action: 30
+  step_domain_fraction: 0.05
+  initial_refinement:
+    mode: random
+    fixed_level: 2
+    max_initial_level: 4
+    probability: 0.7
+training:
+  total_timesteps: 100000
+  algorithm: A2C
+  learning_rate: 0.0003
+  n_steps: 5
+  ent_coef: 0.01
+  callback: enhanced
+solver:
+  nop: 4
+  max_level: 8
+  courant_max: 0.1
+  icase: 1
+  initial_elements:
+    - -1
+    - -0.4
+    - 0
+    - 0.4
+    - 1
+  verbose: false
+  balance: false
+```
+
+### Output Structure
+```
+results/<results-dir>/gamma_c_<value>_<device>/run_<timestamp>/
+├── config.yaml                    # Copy of input configuration
+├── device_info.txt                # GPU/CPU information
+├── evaluation.txt                 # Post-training evaluation results
+├── performance.txt                # Training performance metrics
+├── monitor.csv                    # Episode-by-episode training log
+├── gamma_*_training_metrics.json  # Detailed training metrics
+├── gamma_*_training_summary.csv   # Summary statistics
+├── gamma_*_training_report.pdf    # Training visualization report
+├── model_500_steps.zip            # Checkpoint models (every 500 steps)
+├── model_1000_steps.zip
+├── ...
+├── models/
+│   └── final_model.zip            # Final trained model
+└── tensorboard/
+    └── gamma_c_*_1/
+        └── events.out.tfevents.*  # TensorBoard logs
+```
+
+### Quick Test Example
+
+For a fast validation run (~2 minutes on CPU):
+```bash
+# Create minimal test config
+cat > experiments/configs/test_quick.yaml << 'EOF'
+environment:
+  max_episode_steps: 200
+  element_budget: 30
+  gamma_c: 50.0
+  rl_iterations_per_timestep: 25
+  min_rl_iterations: 25
+  max_rl_iterations: 25
+  max_consecutive_no_action: 30
+  step_domain_fraction: 0.05
+  initial_refinement:
+    mode: random
+    fixed_level: 2
+    max_initial_level: 4
+    probability: 0.7
+training:
+  total_timesteps: 5000
+  algorithm: A2C
+  learning_rate: 0.0003
+  n_steps: 5
+  ent_coef: 0.01
+  callback: enhanced
+solver:
+  nop: 4
+  max_level: 8
+  courant_max: 0.1
+  icase: 1
+  initial_elements:
+    - -1
+    - -0.4
+    - 0
+    - 0.4
+    - 1
+  verbose: false
+  balance: false
+EOF
+
+# Run test
+python experiments/run_experiments_mixed_gpu.py \
+    --config experiments/configs/test_quick.yaml \
+    --results-dir results/quick_test \
+    --force-cpu
+```
 
 ---
 
