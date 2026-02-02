@@ -72,7 +72,7 @@ def validate_sweep_models(sweep_name):
     return len(model_dirs)
 
 
-def create_slurm_job(refinement_level, element_budget, max_level, sweep_name, icase=1):
+def create_slurm_job(refinement_level, element_budget, max_level, sweep_name, icase=1, num_models=81):
     """Create a SLURM job file for a specific evaluation configuration.
     
     Reads the batch evaluation template and substitutes placeholders with
