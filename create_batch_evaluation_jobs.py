@@ -41,18 +41,17 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 def validate_sweep_models(sweep_name):
     """Validate that the sweep models directory exists and contains expected models.
     
-    Checks the analysis/data/models directory for the specified sweep and verifies
-    that all 81 expected model directories are present.
+    Checks the analysis/data/models directory for the specified sweep and counts
+    the model directories present.
     
     Args:
         sweep_name: Name of the parameter sweep (e.g., 'session4_100k_uniform').
     
-    Raises:
-        SystemExit: If the models directory does not exist.
+    Returns:
+        int: Number of model directories found.
     
-    Note:
-        Prints a warning but continues if fewer than 81 models are found,
-        as partial evaluation may still be useful.
+    Raises:
+        SystemExit: If the models directory does not exist or contains no models.
     """
     models_dir = os.path.join('analysis', 'data', 'models', sweep_name)
     
@@ -65,11 +64,12 @@ def validate_sweep_models(sweep_name):
     model_dirs = [d for d in os.listdir(models_dir) 
                   if os.path.isdir(os.path.join(models_dir, d)) and 'gamma_' in d]
     
-    if len(model_dirs) != 81:
-        print(f"⚠️  Warning: Expected 81 model directories, found {len(model_dirs)} in {models_dir}")
-        print(f"   Continuing anyway, but jobs may fail if models are missing.")
-    else:
-        print(f"✅ Validated {len(model_dirs)} model directories in {sweep_name}")
+    if len(model_dirs) == 0:
+        print(f"❌ Error: No model directories found in {models_dir}")
+        sys.exit(1)
+    
+    print(f"✅ Found {len(model_dirs)} model directories in {sweep_name}")
+    return len(model_dirs)
 
 
 def create_slurm_job(refinement_level, element_budget, max_level, sweep_name, icase=1):
@@ -98,6 +98,7 @@ def create_slurm_job(refinement_level, element_budget, max_level, sweep_name, ic
         - SWEEP_NAME
         - ICASE
         - PROJECT_ROOT_PLACEHOLDER
+        - NUM_MODELS
     """
     # Read template
     template_file = 'slurm_scripts/batch_model_evaluation_template.slurm'
@@ -111,6 +112,7 @@ def create_slurm_job(refinement_level, element_budget, max_level, sweep_name, ic
     job_content = job_content.replace('SWEEP_NAME', sweep_name)
     job_content = job_content.replace('ICASE', str(icase))
     job_content = job_content.replace('PROJECT_ROOT_PLACEHOLDER', PROJECT_ROOT)
+    job_content = job_content.replace('NUM_MODELS', str(num_models))
     
     # Write job file
     job_file = f'slurm_scripts/batch_model_evaluation_ref_{refinement_level}_budget_{element_budget}.slurm'
@@ -176,7 +178,7 @@ Examples:
     sweep_name = args.sweep_name
 
     # Validate sweep models exist
-    validate_sweep_models(sweep_name)
+    num_models = validate_sweep_models(sweep_name)
     
     # Calculate expected initial elements for each config
     print("Configuration analysis:")
@@ -189,7 +191,7 @@ Examples:
     
     job_files = []
     for refinement_level, element_budget, max_level in configs: 
-        job_file = create_slurm_job(refinement_level, element_budget, max_level, sweep_name, args.icase)
+        job_file = create_slurm_job(refinement_level, element_budget, max_level, sweep_name, args.icase, num_models)
         job_files.append((job_file, refinement_level, element_budget, max_level))
     
     print(f"\nCreated {len(job_files)} job files.")

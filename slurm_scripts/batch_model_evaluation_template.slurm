@@ -7,7 +7,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
-#SBATCH --array=1-81
+#SBATCH --array=1-NUM_MODELS
 #SBATCH --output=logs/batch_ref_REFINEMENT_LEVEL_budget_ELEMENT_BUDGET_max_MAX_LEVEL_%A_%a.out
 #SBATCH --error=logs/batch_ref_REFINEMENT_LEVEL_budget_ELEMENT_BUDGET_max_MAX_LEVEL_%A_%a.err
 
