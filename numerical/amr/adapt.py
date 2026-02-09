@@ -192,10 +192,9 @@ def enforce_balance(active, label_mat, grid, info_mat, nop, coord, PS1, PS2, PG1
     bal_ctr = 0
     while (bal_ctr <= max_level):
         if check_balance(active, label_mat):
-            # print(f'grid is balanced. level: {level}')
             bal_ctr = max_level + 1
+
         else:
-            # print(f'balancing grid. balance step: {bal_ctr}')
 
 
             bal_marks = balance_mark(active, label_mat)
@@ -260,7 +259,6 @@ def adapt_mesh(nop, cur_grid, active, label_mat, info_mat, marks, max_level):
     # Process marks sequentially (indices shift as we modify arrays)
     i = 0
     while i < len(marks):
-        # print(f'processing element {i+1} with mark value {marks[i]}')
         if marks[i] == 0:
             # No change — skip to next element
             i += 1
@@ -269,11 +267,9 @@ def adapt_mesh(nop, cur_grid, active, label_mat, info_mat, marks, max_level):
         if marks[i] > 0:
             # === REFINEMENT ===
             elem = active[i]
-            # print(f'refining element {elem}')
             level = label_mat[elem-1][4]
             # Check max level constraint
             if level >= max_level:
-                print(f'Warning: Element {elem} is already at max refinement level {max_level}. Cancelling refinement.')
                 marks[i] = 0
                 i += 1
                 continue

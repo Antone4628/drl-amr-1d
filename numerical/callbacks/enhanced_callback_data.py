@@ -609,9 +609,6 @@ class EnhancedMonitorCallback(BaseCallback):
                 if hasattr(self.model.logger, 'name_to_value'):
                     metrics = self.model.logger.name_to_value
                     
-                    # Debug: Print available metrics occasionally
-                    if self.verbose > 1 and self.num_timesteps % self.log_freq == 0:
-                        print(f"DEBUG - Available metrics: {list(metrics.keys())}")
                     
                     # Capture policy and value loss
                     if 'train/policy_loss' in metrics:
@@ -624,8 +621,6 @@ class EnhancedMonitorCallback(BaseCallback):
                     for key in entropy_keys:
                         if key in metrics:
                             self.training_metrics['entropy'].append((self.num_timesteps, metrics[key]))
-                            if self.verbose > 1:
-                                print(f"DEBUG - Found entropy metric: {key} = {metrics[key]}")
                             break
                     
                     # Try different episode reward mean names

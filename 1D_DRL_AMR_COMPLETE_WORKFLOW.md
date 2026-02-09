@@ -1,8 +1,8 @@
 # 1D DRL-AMR Complete Workflow
 
-**Document Status:** Living Document (Draft)  
-**Last Updated:** January 2, 2025  
-**Project:** Deep Reinforcement Learning for Adaptive Mesh Refinement (1D Wave Equation)
+**Document Status:** Complete  
+**Last Updated:** February 9, 2025  
+**Project:** Deep Reinforcement Learning for Adaptive Mesh Refinement (1D Advection Equation)
 
 ---
 
@@ -14,12 +14,11 @@
 4. [Monitoring Training Progress](#monitoring-training-progress)
 5. [Batch Model Evaluation](#batch-model-evaluation)
 6. [Single Model Evaluation](#single-model-evaluation)
-7. [Transferring Results to Local Machine](#transferring-results-to-local-machine)
-8. [Visualization](#visualization)
-   - [HPC Visualization](#hpc-visualization)
-   - [Local Visualization](#local-visualization)
-9. [Troubleshooting](#troubleshooting)
-10. [Reference](#reference)
+7. [Model Performance Analysis](#model-performance-analysis)
+8. [Transferring Results to Local Machine](#transfer-to-local-machine)
+9. [Transferability Analysis](#transferability-analysis)
+10. [Troubleshooting](#troubleshooting)
+11. [Reference](#reference)
 
 ---
 
@@ -47,10 +46,11 @@ This document provides complete instructions for executing the DRL-AMR training 
 └─────────────────────────────────────────────────────────────────────────────┘
                                     ↓
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         VISUALIZATION PHASE                                  │
+│                      ANALYSIS & VISUALIZATION PHASE                          │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│           HPC Visualization           OR       Local Visualization          │
-│    (animations, snapshots on Borah)        (transfer → local analysis)      │
+│  Stage 1-2: Per-Config Analysis (HPC)    Stage 3: Cross-Config (Local)     │
+│  comprehensive_analyzer.py               key_models_analyzer.py            │
+│  pareto_key_models_analyzer.py           Transferability testing           │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -398,22 +398,29 @@ python experiments/run_experiments_mixed_gpu.py \
 
 ## Monitoring Training Progress
 
-*TODO: Document monitoring tools and TensorBoard usage*
+Each training run produces three output files for monitoring results: a training report PDF with visualizations, a JSON file with detailed metrics, and a CSV with summary statistics. These are generated automatically at the end of each training run.
 
 ### Using TensorBoard
+
+For real-time monitoring during training, use TensorBoard:
 
 ```bash
 # Launch TensorBoard (on Borah)
 tensorboard --logdir=results/<sweep_name> --port=6006
 ```
 
-### Monitor Script
+### Checking Sweep Progress
 
 ```bash
-python monitor_param_sweep.py
-```
+# Count completed models
+ls results/<sweep_name>/ | wc -l
 
-*Details to be added in future session*
+# Check for failures
+ls results/<sweep_name>/*/job_failed.yaml 2>/dev/null | wc -l
+
+# Check SLURM job status
+squeue -u $USER | grep param
+```
 
 ---
 
@@ -451,7 +458,7 @@ ls analysis/data/models/<sweep_name>/ | head -5
 
 **Usage:**
 ```bash
-python create_batch_evaluation_jobs.py <config1> [config2] ... --sweep-name <name> --icase <num>
+python create_batch_evaluation_jobs.py <config1> [config2] ... --sweep-name <n> --icase <num>
 ```
 
 Each config is specified as: `<initial_refinement>,<element_budget>,<max_level>`
@@ -509,7 +516,7 @@ sbatch slurm_scripts/batch_model_evaluation_ref_5_budget_150.slurm
 for f in slurm_scripts/batch_model_evaluation_ref_*.slurm; do sbatch $f; done
 ```
 
-Each SLURM script runs as an array job with 81 tasks (one per model).
+Each SLURM script runs as an array job (one task per model in the sweep).
 
 ### Step 3: Monitor Progress
 ```bash
@@ -604,24 +611,78 @@ cat logs/batch_ref_*_<jobid>_*.err | grep -i error
 
 ## Single Model Evaluation
 
-*TODO: Document single model evaluation workflow*
+Evaluate a single trained model with visualization output. Useful for inspecting individual model behavior, generating animations, and producing thesis figures.
 
 **Script:** `analysis/model_performance/single_model_runner.py`
 
-**CLI Arguments:**
-- `--model-path` — Path to trained model
-- `--time-final` — Simulation end time
-- `--element-budget` — Maximum elements
-- `--max-level` — Maximum refinement level
-- `--icase` — Test case for evaluation
-- `--initial-refinement` — Initial mesh refinement level
-- `--plot-mode` — {animate, snapshot, final}
-- `--include-exact` — Include exact solution overlay
-- `--output-dir` — Output directory for plots
+### CLI Arguments
 
-*Details to be added in future session*
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--model-path` | str | required | Path to trained model file (.zip) |
+| `--time-final` | float | 1.0 | Final simulation time |
+| `--element-budget` | int | 50 | Maximum number of elements |
+| `--max-level` | int | 5 | Maximum refinement level |
+| `--nop` | int | 4 | Polynomial order |
+| `--courant-max` | float | 0.1 | CFL number |
+| `--icase` | int | 1 | Test case for evaluation |
+| `--initial-refinement` | int | 0 | Initial mesh refinement level (0 = base mesh) |
+| `--plot-mode` | str | None | `animate`, `snapshot`, or `final` |
+| `--include-exact` | flag | True | Include exact solution overlay |
+| `--no-exact` | flag | — | Disable exact solution overlay |
+| `--output-dir` | str | auto | Directory for plots |
+| `--verbose` | flag | False | Print detailed logs |
+| `--output-file` | str | None | Save results to JSON file |
 
----
+### Example Usage
+
+```bash
+# Quick final-state plot
+python analysis/model_performance/single_model_runner.py \
+    --model-path analysis/data/models/session4_100k_uniform/gamma_50.0_step_0.05_rl_25_budget_30/final_model.zip \
+    --plot-mode final \
+    --element-budget 80 \
+    --initial-refinement 4 \
+    --max-level 4 \
+    --icase 1 \
+    --verbose
+
+# Generate snapshot (multiple timesteps in one figure)
+python analysis/model_performance/single_model_runner.py \
+    --model-path analysis/data/models/session4_100k_uniform/gamma_50.0_step_0.05_rl_25_budget_30/final_model.zip \
+    --plot-mode snapshot \
+    --element-budget 80 \
+    --initial-refinement 4 \
+    --max-level 4 \
+    --icase 1
+
+# Full animation
+python analysis/model_performance/single_model_runner.py \
+    --model-path analysis/data/models/session4_100k_uniform/gamma_50.0_step_0.05_rl_25_budget_30/final_model.zip \
+    --plot-mode animate \
+    --element-budget 80 \
+    --initial-refinement 4 \
+    --max-level 4 \
+    --icase 1
+
+# Save metrics to JSON (no plot)
+python analysis/model_performance/single_model_runner.py \
+    --model-path analysis/data/models/session4_100k_uniform/gamma_50.0_step_0.05_rl_25_budget_30/final_model.zip \
+    --element-budget 80 \
+    --initial-refinement 4 \
+    --max-level 4 \
+    --output-file results/eval_output.json
+```
+
+### Output Metrics
+
+The evaluation returns (and optionally saves to JSON):
+- `final_l2_error` — Mesh-dependent L2 error at final time
+- `grid_normalized_l2_error` — Mesh-independent L2 error
+- `total_cost` — Cumulative element-timesteps
+- `cost_ratio` — Cost relative to no-AMR baseline (values < 1.0 mean AMR is more efficient)
+- `final_elements` — Element count at final time
+- `total_adaptations` — Total mesh adaptations performed
 
 ---
 
@@ -898,7 +959,7 @@ After completing Stages 1 and 2 on HPC, transfer the evaluation results to your 
 **Transfer command:**
 ```bash
 scp -r <user>@borah-login.boisestate.edu:/bsuhome/antonechacartegu/projects/drl-amr-1d/analysis/data/model_performance/<sweep_name> \
-    ~~/drl-amr-1d/analysis/data/model_performance/
+    ~/drl-amr-1d/analysis/data/model_performance/
 ```
 
 **Example:**
@@ -1013,53 +1074,6 @@ head -1 analysis/data/model_performance/<sweep_name>/model_results_ref4_budget80
 # Required: gamma_c, step_domain_fraction, rl_iterations_per_timestep, element_budget,
 #           final_l2_error, grid_normalized_l2_error, total_cost, cost_ratio
 ```
-
----
-
-
-## Transferring Results to Local Machine
-
-*TODO: Document file transfer workflow*
-
-### Transfer Analysis Files
-
-**Script:** `analysis/data_management/transfer_analysis_files.py`
-
-```bash
-python analysis/data_management/transfer_analysis_files.py <sweep_name> \
-    --hpc-path antonechacartegu@borah-login:/path/to/results/<sweep_name>
-```
-
-### Transfer Model Files
-
-**Script:** `analysis/data_management/transfer_model_files.py`
-
-*Details to be added in future session*
-
----
-
-## Visualization
-
-### HPC Visualization
-
-*TODO: Document HPC-based visualization workflow*
-
-**Scripts:**
-- `analysis/model_performance/single_model_runner.py` — Single model animations
-- `analysis/transferability/transferability_runner.py` — Transferability testing
-
-*Details to be added in future session*
-
-### Local Visualization
-
-Local visualization workflows are covered in the following sections:
-
-- **Stage 3 Analysis:** Cross-configuration Pareto analysis and flagship model selection — see [Stage 3: Cross-Configuration Key Models Analysis](#stage-3-cross-configuration-key-models-analysis-local)
-- **Single Model Animations:** Generate animations of specific models — see [Single Model Evaluation](#single-model-evaluation)
-
-**Prerequisites:**
-- Local `rl-amr` conda environment activated
-- Transferred analysis data from HPC
 
 ---
 
@@ -1354,6 +1368,11 @@ All test cases should show `PASS`. If any fail, fix the `eff()` function in `num
 | `experiments/run_experiments_mixed_gpu.py` | Main training script |
 | `numerical/solvers/utils.py` | `exact_solution()` and `eff()` functions |
 | `analysis/verification/verify_eff_derivatives.py` | Derivative verification |
+| `analysis/model_performance/single_model_runner.py` | Single model evaluation and visualization |
+| `analysis/model_performance/comprehensive_analyzer.py` | Stage 1 per-config analysis |
+| `analysis/model_performance/pareto_key_models_analyzer.py` | Stage 2 key model identification |
+| `analysis/model_performance/key_models_analyzer.py` | Stage 3 cross-config analysis |
+| `analysis/transferability/transferability_runner.py` | Transferability evaluation runner |
 
 ### Completed Sweeps
 
