@@ -12,3 +12,6 @@ gymnasium
 
 # Utilities
 pyyaml
+
+# Testing
+pytest
