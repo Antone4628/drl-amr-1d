@@ -29,3 +29,9 @@ checkpoints/
 *.zip
 notebooks/.ipynb_checkpoints/
 notebooks/*.svg
+
+# Session data (models, evaluation results, analysis outputs)
+# Keep directory structure via .gitkeep, but don't track data
+analysis/data/models/session*/
+analysis/data/model_performance/session*/
+flagship_snapshots.log
