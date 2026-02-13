@@ -104,7 +104,6 @@ def mock_aggregate_dir():
                 'grid_normalized_l2_error': error * 1.1,
                 'initial_elements': 4 * (2 ** init_ref),
                 'evaluation_element_budget': budget,
-                'resource_usage_ratio': 0.5 + 0.3 * np.random.rand(),
             })
         
         df = pd.DataFrame(data)

@@ -1839,7 +1839,7 @@ class KeyModelsAnalyzer:
                 f"  Initial refinement level: {flagship['initial_refinement']}",
                 f"  Initial number of elements: {flagship['initial_elements']}",
                 f"  Element budget: {flagship['evaluation_element_budget']}",
-                f"  Initial resource usage ratio: {flagship['resource_usage_ratio']:.3f}",
+                f"  Initial resource usage ratio: {flagship['initial_elements'] / flagship['evaluation_element_budget']:.3f}",
                 f"  Max refinement level: {flagship['max_level']}",
                 "",
                 "Performance Metrics:",
@@ -1917,7 +1917,6 @@ class KeyModelsAnalyzer:
         Args:
             visualizations: List of visualization names to create. Options:
                 - 'all': Run all standard visualizations
-                - 'heatmaps': Performance heatmaps
                 - 'distributions': Parameter distribution box plots
                 - 'tradeoffs': Performance trade-off scatter plots
                 - 'efficiency': Efficiency comparison plots
@@ -1931,15 +1930,13 @@ class KeyModelsAnalyzer:
                 - 'manual_flagship': Manually selected models plot
         """
         if 'all' in visualizations:
-            visualizations = ['heatmaps', 'distributions', 'tradeoffs', 'efficiency', 'flagship', 'stage3_overview', 'global_pareto', 'table']
+            visualizations = ['distributions', 'tradeoffs', 'efficiency', 'flagship', 'stage3_overview', 'global_pareto', 'table']
         
         if self.verbose:
             print(f"\n🎯 Running Key Models Analysis")
             print(f"   Visualizations: {', '.join(visualizations)}")
         
         # Run requested visualizations
-        if 'heatmaps' in visualizations:
-            self.create_performance_heatmaps()
         
         if 'distributions' in visualizations:
             self.analyze_parameter_distributions()
@@ -1999,7 +1996,7 @@ def main():
     parser.add_argument('sweep_name', help='Parameter sweep name (e.g., ref5_budget100_max5)')
     parser.add_argument('--visualizations', nargs='+', 
                 default=['all'],
-                choices=['all', 'heatmaps', 'distributions', 'tradeoffs', 'efficiency', 'flagship', 'flagship_combined', 'flagship_comparison', 'flagship_dashboard','stage3_overview', 'global_pareto','table', 'manual_flagship'],
+                choices=['all',  'distributions', 'tradeoffs', 'efficiency', 'flagship', 'flagship_combined', 'flagship_comparison', 'flagship_dashboard','stage3_overview', 'global_pareto','table', 'manual_flagship'],
                 help='Visualizations to create (default: all)')
     parser.add_argument('--output-subdir', default='uniform_initial_max',
                     help='Output subdirectory name')
