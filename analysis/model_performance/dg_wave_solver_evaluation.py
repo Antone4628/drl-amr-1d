@@ -217,8 +217,8 @@ class DGWaveSolverEvaluation:
         
         # Check condition number before proceeding
         cond_num = np.linalg.cond(self.M)
-        if self.verbose:
-            print(f"Mass matrix condition number: {cond_num}")
+        # if self.verbose:
+        #     print(f"Mass matrix condition number: {cond_num}")
         
         if cond_num > 1e10:  # Choose appropriate threshold
             raise ValueError(f"Mass matrix condition number too high: {cond_num}")

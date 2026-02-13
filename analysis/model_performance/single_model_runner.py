@@ -917,7 +917,7 @@ def run_burnin_diagnostics(model_path, max_rounds=20, element_budget=50,
         courant_max=courant_max,
         icase=icase,
         periodic=True,
-        verbose=verbose
+        verbose=False
     )
     
     # Initialize model adapter
@@ -925,7 +925,7 @@ def run_burnin_diagnostics(model_path, max_rounds=20, element_budget=50,
         model_path=model_path,
         solver=solver,
         element_budget=element_budget,
-        verbose=verbose
+        verbose=False
     )
     
     if verbose:
@@ -1087,6 +1087,14 @@ def main():
     parser.add_argument('--initial-refinement', type=int, default=0, 
                    help='Initial refinement level (0=base mesh, >0 refines all elements)')
     
+    # Burn-in diagnostics options
+    parser.add_argument('--burnin-diagnostics', action='store_true',
+                       help='Run burn-in diagnostics instead of normal evaluation')
+    parser.add_argument('--max-burnin-rounds', type=int, default=20,
+                       help='Maximum number of burn-in rounds (default: 20)')
+    parser.add_argument('--burnin-output', 
+                       help='Save burn-in results to JSON file')
+    
     # Plotting options
     parser.add_argument('--plot-mode', choices=['animate', 'snapshot', 'final'], 
                        help='Plotting mode: animate (full animation), snapshot (multiple timesteps), final (final timestep only)')
@@ -1101,6 +1109,35 @@ def main():
     parser.add_argument('--output-file', help='Save results to JSON file')
     
     args = parser.parse_args()
+
+
+    # Branch: burn-in diagnostics mode
+    if args.burnin_diagnostics:
+        results = run_burnin_diagnostics(
+            model_path=args.model_path,
+            max_rounds=args.max_burnin_rounds,
+            element_budget=args.element_budget,
+            max_level=args.max_level,
+            nop=args.nop,
+            courant_max=args.courant_max,
+            icase=args.icase,
+            verbose=args.verbose,
+            output_file=args.burnin_output,
+        )
+        
+        # Print summary
+        print(f"\nBurn-in Summary for {results['model_dir']}:")
+        print(f"  Final elements: {results['final_element_count']}/{args.element_budget}")
+        print(f"  Converged: {results['converged']}", end="")
+        if results['convergence_round']:
+            print(f" at round {results['convergence_round']}")
+        else:
+            print()
+        
+        if args.burnin_output:
+            print(f"  Results saved to: {args.burnin_output}")
+        
+        return
     
     # Set up output directory
     if args.plot_mode:
