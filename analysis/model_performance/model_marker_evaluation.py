@@ -504,25 +504,25 @@ class ModelMarkerEvaluation:
     def mark_and_adapt_single_round(self, max_adaptations=None):
         """
         Process a complete round of mesh adaptation with fixed element priorities.
-        
         EVALUATION MODE: Uses projected solutions only throughout adaptation process.
-        
         This method implements Foucart's approach with a crucial improvement to avoid
         oscillations: priorities are computed ONCE at the beginning of the round,
         and elements are processed in that fixed order, tracking elements by their
         unique element numbers rather than by indices.
-        
         The method follows these steps:
         1. Compute non-conformity for all initial elements
         2. Sort elements by non-conformity (highest first)
         3. Process each element in priority order, checking if it still exists
         4. Complete when all initial elements have been processed
-        
         Args:
-            max_adaptations: Maximum number of adaptations to perform (optional)
-            
+        max_adaptations: Maximum number of adaptations to perform (optional)
         Returns:
-            int: Number of elements successfully adapted
+        dict: Action breakdown with keys:
+        - 'adaptations': int — number of elements successfully adapted
+        - 'refinements': int — number of elements refined
+        - 'coarsenings': int — number of elements coarsened
+        - 'do_nothings': int — number of elements where model chose no action
+        - 'skipped': int — number of elements no longer active (consumed by earlier
         """
         # Display initial state
         if self.verbose:
@@ -550,6 +550,10 @@ class ModelMarkerEvaluation:
         
         # Initialize tracking variables
         successful_adaptations = 0
+        refinements = 0
+        coarsenings = 0
+        do_nothings = 0
+        skipped = 0
         processed_elements = set()
 
         
@@ -564,6 +568,7 @@ class ModelMarkerEvaluation:
             
             # Skip if element no longer active (was already refined or coarsened)
             if elem_number not in self.solver.active:
+                skipped +=1
                 if self.verbose:
                     print(f"Element {elem_number} no longer active, skipping")
                 continue
@@ -590,6 +595,7 @@ class ModelMarkerEvaluation:
             
             # Skip do-nothing actions if we're just tracking them
             if mapped_action == 0:
+                do_nothings += 1
                 if self.verbose:
                     print(f"Element {elem_number}: no action (do nothing)")
                 # Mark as processed even though no action taken
@@ -606,6 +612,10 @@ class ModelMarkerEvaluation:
             
             if success:
                 successful_adaptations += 1
+                if mapped_action == 1:
+                    refinements += 1
+                elif mapped_action == -1:
+                    coarsenings += 1
                 if self.verbose:
                     print(f"Successfully adapted element {elem_number}, action={mapped_action}")
                     print(f"Current resource usage: {len(self.solver.active)/self.element_budget:.2f}")
@@ -623,4 +633,10 @@ class ModelMarkerEvaluation:
             print(f"  Final active elements: {len(self.solver.active)}/{self.element_budget}")
             print(f"  Final resource usage: {len(self.solver.active)/self.element_budget:.2f}")
         
-        return successful_adaptations
+        return {
+            'adaptations': successful_adaptations,
+            'refinements': refinements,
+            'coarsenings': coarsenings,
+            'do_nothings': do_nothings,
+            'skipped': skipped
+        }

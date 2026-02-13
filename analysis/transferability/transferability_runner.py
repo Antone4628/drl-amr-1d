@@ -731,7 +731,8 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
             print(f"\nTimestep {step_count}, Time: {solver.time:.3f}")
         
         # Apply mesh adaptation using single round approach
-        adaptations_made = model_adapter.mark_and_adapt_single_round()
+        adaptation_result = model_adapter.mark_and_adapt_single_round()
+        adaptations_made = adaptation_result['adaptations']
         total_adaptations += adaptations_made
         
         if verbose:

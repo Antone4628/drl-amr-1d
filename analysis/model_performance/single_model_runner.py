@@ -751,7 +751,8 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
             print(f"\nTimestep {step_count}, Time: {solver.time:.3f}")
         
         # Apply mesh adaptation using single round approach
-        adaptations_made = model_adapter.mark_and_adapt_single_round()
+        adaptation_result = model_adapter.mark_and_adapt_single_round()
+        adaptations_made = adaptation_result['adaptations']
         total_adaptations += adaptations_made
         
         if verbose:
@@ -852,6 +853,187 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
         print(f"Final Elements: {len(solver.active)}")
         print(f"Total Adaptations: {total_adaptations}")
         print(f"Final Time: {solver.time:.3f}")
+    
+    return results
+
+def run_burnin_diagnostics(model_path, max_rounds=20, element_budget=50,
+                           max_level=5, nop=4, courant_max=0.1, icase=1,
+                           verbose=False, output_file=None):
+    """Run burn-in diagnostics for a single model.
+    
+    Starts from base mesh (4 elements) and iteratively applies adaptation
+    rounds, reinitializing the exact solution after each round. Logs per-round
+    metrics to characterize convergence behavior.
+    
+    This implements the burn-in protocol for Experiment 1.1: the model builds
+    the mesh from below-budget rather than starting from a fully-refined
+    over-budget state.
+    
+    Args:
+        model_path: Path to trained model file (.zip)
+        max_rounds: Maximum number of burn-in rounds (default: 20)
+        element_budget: Maximum elements allowed (default: 50)
+        max_level: Maximum refinement level (default: 5)
+        nop: Polynomial order (default: 4)
+        courant_max: CFL number (default: 0.1)
+        icase: Test case identifier (default: 1)
+        verbose: Whether to print detailed logs
+        output_file: Path to save results as JSON (optional)
+        
+    Returns:
+        dict: Results with keys:
+            - 'model_path': str
+            - 'model_dir': str — parent directory name
+            - 'training_parameters': dict or None
+            - 'burnin_parameters': dict — max_rounds, element_budget, etc.
+            - 'rounds': list of dicts — per-round metrics
+            - 'converged': bool — whether element count stabilized
+            - 'convergence_round': int or None — first round with zero net change
+    """
+    import json
+    from collections import Counter
+    
+    # Extract training parameters from path
+    training_params = extract_training_parameters(model_path)
+    model_dir = os.path.basename(os.path.dirname(model_path))
+    
+    if verbose:
+        print(f"=== BURN-IN DIAGNOSTICS ===")
+        print(f"Model: {model_dir}")
+        print(f"Max rounds: {max_rounds}, Budget: {element_budget}")
+        print(f"Max level: {max_level}, icase: {icase}")
+        if training_params:
+            print(f"Training params: {training_params}")
+    
+    # Initialize solver — base mesh, NO initial refinement
+    # xelem matches run_single_model() and transferability_runner: 4 base elements on [-1, 1]
+    xelem = np.array([-1, -0.4, 0, 0.4, 1])
+    
+    solver = DGWaveSolverEvaluation(
+        nop=nop,
+        xelem=xelem,
+        max_elements=element_budget * 10,  # Internal headroom, same as run_single_model()
+        max_level=max_level,
+        courant_max=courant_max,
+        icase=icase,
+        periodic=True,
+        verbose=verbose
+    )
+    
+    # Initialize model adapter
+    model_adapter = ModelMarkerEvaluation(
+        model_path=model_path,
+        solver=solver,
+        element_budget=element_budget,
+        verbose=verbose
+    )
+    
+    if verbose:
+        print(f"Initial mesh: {len(solver.active)} elements")
+    
+    # Burn-in loop
+    round_metrics = []
+    converged = False
+    convergence_round = None
+    
+    for round_num in range(1, max_rounds + 1):
+        if verbose:
+            print(f"\n--- Burn-in Round {round_num}/{max_rounds} ---")
+        
+        # Record pre-adaptation state
+        element_count_before = len(solver.active)
+        
+        # Compute non-conformity stats BEFORE adaptation (what the model sees)
+        non_conformities = []
+        for idx in range(len(solver.active)):
+            nc = model_adapter.compute_element_non_conformity(idx)
+            non_conformities.append(nc)
+        
+        max_non_conformity = max(non_conformities) if non_conformities else 0.0
+        mean_non_conformity = float(np.mean(non_conformities)) if non_conformities else 0.0
+        
+        # Run one adaptation round
+        adaptation_result = model_adapter.mark_and_adapt_single_round()
+        
+        # Record post-adaptation state
+        element_count_after = len(solver.active)
+        net_change = element_count_after - element_count_before
+        resource_usage = element_count_after / element_budget
+        
+        # Get level distribution
+        try:
+            levels = solver.get_active_levels()
+            level_counts = dict(Counter(int(l) for l in levels))
+        except Exception:
+            level_counts = {}
+        
+        # Build round metrics
+        round_data = {
+            'round_number': round_num,
+            'element_count_before': element_count_before,
+            'element_count_after': element_count_after,
+            'net_change': net_change,
+            'resource_usage': round(resource_usage, 4),
+            'refinements': adaptation_result['refinements'],
+            'coarsenings': adaptation_result['coarsenings'],
+            'do_nothings': adaptation_result['do_nothings'],
+            'skipped': adaptation_result['skipped'],
+            'adaptations': adaptation_result['adaptations'],
+            'max_non_conformity': round(max_non_conformity, 8),
+            'mean_non_conformity': round(mean_non_conformity, 8),
+            'active_levels': level_counts,
+        }
+        round_metrics.append(round_data)
+        
+        if verbose:
+            print(f"  Elements: {element_count_before} -> {element_count_after} (net: {net_change:+d})")
+            print(f"  Actions: {adaptation_result['refinements']}R / {adaptation_result['coarsenings']}C / {adaptation_result['do_nothings']}N / {adaptation_result['skipped']}S")
+            print(f"  Resource usage: {resource_usage:.2f}")
+            print(f"  Non-conformity: max={max_non_conformity:.6f}, mean={mean_non_conformity:.6f}")
+            print(f"  Levels: {level_counts}")
+        
+        # Reinitialize exact solution on adapted mesh
+        solver.q = solver._initialize_solution()
+        
+        # Check for convergence (zero net change)
+        if net_change == 0 and not converged:
+            converged = True
+            convergence_round = round_num
+            if verbose:
+                print(f"  *** Converged at round {round_num} (zero net change) ***")
+    
+    # Build results
+    results = {
+        'model_path': str(model_path),
+        'model_dir': model_dir,
+        'training_parameters': training_params,
+        'burnin_parameters': {
+            'max_rounds': max_rounds,
+            'element_budget': element_budget,
+            'max_level': max_level,
+            'nop': nop,
+            'courant_max': courant_max,
+            'icase': icase,
+        },
+        'rounds': round_metrics,
+        'converged': converged,
+        'convergence_round': convergence_round,
+        'final_element_count': len(solver.active),
+        'final_resource_usage': round(len(solver.active) / element_budget, 4),
+    }
+    
+    if verbose:
+        print(f"\n=== BURN-IN COMPLETE ===")
+        print(f"Final elements: {len(solver.active)}/{element_budget}")
+        print(f"Converged: {converged}" + (f" at round {convergence_round}" if converged else ""))
+    
+    # Save to JSON if requested
+    if output_file:
+        os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else '.', exist_ok=True)
+        with open(output_file, 'w') as f:
+            json.dump(results, f, indent=2)
+        if verbose:
+            print(f"Results saved to {output_file}")
     
     return results
 
