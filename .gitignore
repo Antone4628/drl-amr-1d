@@ -35,3 +35,7 @@ notebooks/*.svg
 analysis/data/models/session*/
 analysis/data/model_performance/session*/
 flagship_snapshots.log
+
+# Generated SLURM sweep scripts
+slurm_scripts/param_sweep_data/
+submit_param_sweep_data.sh
