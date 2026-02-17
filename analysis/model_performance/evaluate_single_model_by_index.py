@@ -6,7 +6,7 @@ enabling parallel batch processing of all 81 models in a sweep. Designed
 to be called from SLURM job arrays where each task evaluates one model.
 
 Usage:
-    python evaluate_single_model_by_index.py <index> <sweep_name> <initial_refinement> <element_budget> <max_level> <icase>
+    python evaluate_single_model_by_index.py <index> <sweep_name> <initial_refinement> <element_budget> <max_level> <icase> [burnin]
 
 Args:
     index: 1-based model index (SLURM_ARRAY_TASK_ID)
@@ -15,10 +15,18 @@ Args:
     element_budget: Maximum elements allowed during evaluation
     max_level: Maximum refinement level for AMR
     icase: Test case identifier for initial condition
+    burnin: Optional flag ('1' to enable). When set, uses burn-in initialization
+        instead of fixed refinement. Model iteratively adapts from base mesh
+        before timestepping begins. initial_refinement is ignored when burnin=1.
 
 Example SLURM submission:
+    # Fixed refinement:
     #SBATCH --array=1-81
     python evaluate_single_model_by_index.py $SLURM_ARRAY_TASK_ID session4_100k_uniform 4 80 5 1
+    
+    # Burn-in initialization:
+    #SBATCH --array=1-81
+    python evaluate_single_model_by_index.py $SLURM_ARRAY_TASK_ID session4_100k_uniform 0 50 5 1 1
 
 Output:
     - JSON file: {model_dir}_ref_{initial_refinement}_budget_{element_budget}_results.json
@@ -51,12 +59,16 @@ def main():
     
     The CSV output uses file locking (fcntl) for thread-safe concurrent writes
     from multiple SLURM array tasks.
+
+    When burnin='1' is passed, initial_refinement is ignored and the model
+    builds its mesh from the 4-element base grid via iterative adaptation.
     
     Raises:
         SystemExit: If wrong number of arguments or index out of range.
     """
-    if len(sys.argv) != 7:  # Changed from 6 to 7
-        print("Usage: python evaluate_single_model_by_index.py <index> <sweep_name> <initial_refinement> <element_budget> <max_level> <icase>")
+    if len(sys.argv) not in (7, 8):
+        print("Usage: python evaluate_single_model_by_index.py <index> <sweep_name> <initial_refinement> <element_budget> <max_level> <icase> [burnin]")
+        print("  burnin: optional, pass '1' to use burn-in initialization instead of fixed refinement")
         sys.exit(1)
     
     index = int(sys.argv[1]) - 1
@@ -65,15 +77,17 @@ def main():
     element_budget = int(sys.argv[4])
     max_level = int(sys.argv[5])
     icase = int(sys.argv[6])
+    # Optional burn-in flag — positional for SLURM array job simplicity
+    use_burnin = len(sys.argv) >= 8 and sys.argv[7] == '1'
     
     # Calculate expected initial elements
     base_elements = 4  # From xelem = [-1, -0.4, 0, 0.4, 1]
     expected_initial_elements = base_elements * (2 ** initial_refinement)
     
-    print(f"Configuration: initial_refinement={initial_refinement}, element_budget={element_budget}")
+    print(f"Configuration: initial_refinement={initial_refinement}, element_budget={element_budget}, burnin={use_burnin}")
     print(f"Expected initial elements: {expected_initial_elements}")
     
-    if expected_initial_elements >= element_budget:
+    if expected_initial_elements >= element_budget and not use_burnin:
         print(f"WARNING: Starting with {expected_initial_elements} elements but budget is {element_budget}")
         print("Model will start over budget and can only coarsen or do nothing!")
     
@@ -91,12 +105,11 @@ def main():
     
     print(f"Evaluating model {index+1}/{len(model_dirs)}: {model_dir}")
     
-    # Run evaluation
+    # Run evaluation — burn-in starts from base mesh, so initial_refinement=0
     results = run_single_model(
         model_path=model_path,
         time_final=1.0,
-        element_budget=element_budget,  # Use configurable budget
-        # max_level=initial_refinement,
+        element_budget=element_budget,
         max_level=max_level,
         nop=4,
         courant_max=0.1,
@@ -105,7 +118,8 @@ def main():
         include_exact=False,
         verbose=False,
         output_dir=None,
-        initial_refinement=initial_refinement
+        initial_refinement=0 if use_burnin else initial_refinement,
+        burnin_init=use_burnin,
     )
     
     # Save individual results
@@ -141,6 +155,18 @@ def main():
         results['simulation_metrics']['number_of_timesteps'],
         results['simulation_metrics']['no_amr_baseline_cost']
     ]
+    # Append burn-in metadata columns
+    burnin_meta = results.get('burnin_metadata')
+    if burnin_meta:
+        csv_row.extend([
+            True,
+            burnin_meta['converged'],
+            burnin_meta['convergence_round'],
+            burnin_meta['rounds_used'],
+            burnin_meta['final_burnin_elements'],
+        ])
+    else:
+        csv_row.extend([False, None, None, None, None])
     
     # Thread-safe CSV writing
     import fcntl
@@ -148,7 +174,9 @@ def main():
     'gamma_c', 'step_domain_fraction', 'rl_iterations_per_timestep', 'element_budget',
     'initial_refinement', 'evaluation_element_budget', 'final_l2_error', 'grid_normalized_l2_error', 
     'total_cost', 'final_elements', 'total_adaptations', 'final_time', 'initial_elements', 'model_path',
-    'cost_ratio', 'number_of_timesteps', 'no_amr_baseline_cost'
+    'cost_ratio', 'number_of_timesteps', 'no_amr_baseline_cost',
+    'burnin_used', 'burnin_converged', 'burnin_convergence_round', 'burnin_rounds_used',
+    'burnin_final_elements'
     ]
     
     with open(csv_file, 'a') as f:

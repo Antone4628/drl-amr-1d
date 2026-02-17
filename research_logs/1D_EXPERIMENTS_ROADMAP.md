@@ -2,8 +2,8 @@
 
 **Project:** Systematic investigation of evaluation, observation space, and training improvements for 1D DRL-AMR  
 **Created:** February 12, 2025  
-**Last Updated:** February 16, 2025  
-**Status:** Thread 1 — Experiment 1.1 Complete, Experiment 1.2 Ready
+**Last Updated:** February 17, 2025
+**Status:** Thread 1 — Experiment 1.1 Complete, Experiment 1.2 In Progress
 
 ---
 
@@ -91,8 +91,8 @@ Threads 2 and 3 branching strategy will be decided when we get there, informed b
 - Persistent mesh churn at net-zero equilibrium observed in r6 model (F5)
 
 ### Experiment 1.2: Stopping Criterion Design
-**Status:** Ready — informed by Experiment 1.1 results  
-**Experiment Log:** `EXP_LOG_1.2_stopping_criterion.md` (create when starting)
+**Status:** In Progress — burn-in init path implemented and tested locally, batch evaluation pending  
+**Experiment Log:** `research_logs/EXP_LOG_1_2_stopping_criterion.md`
 
 **Objective:** Define a concrete, automatable stopping rule for burn-in based on Experiment 1.1 findings.
 
@@ -221,6 +221,10 @@ Placeholder for investigations that emerge during Threads 1–3. When adding exp
 | 2025-02-16 | Stopping criterion: zero net change × 3 consecutive rounds with hard max_rounds cap | Works for all 8 converging models; oscillation is constraint artifact that doesn't need special handling; non-converging models use mesh at max_rounds |
 | 2025-02-16 | Adopt filesystem MCP for living document management | Configured Claude Desktop filesystem MCP server pointing at `/Users/antonechacartegui/projects/drl-amr-1d/`. Roadmap and experiment logs are now read and edited in place on disk rather than produced as complete replacement files for project knowledge upload. Eliminates session-end download/upload friction. Static reference docs remain in project knowledge. |
 | 2025-02-16 | Remove living documents from project knowledge | Roadmap and experiment logs moved to disk-only access via filesystem MCP. Project knowledge retains only static reference documents (workflow, code practices, dependency tree, evaluation architecture, experiment log template). |
+| 2025-02-17 | Decouple verbose from solver/adapter in `run_single_model()` | Matches pattern from `run_burnin_diagnostics()` (R.2 decision). `--verbose` controls high-level output only; solver/adapter internals silent unless temporarily toggled in code. |
+| 2025-02-17 | Cost_ratio baseline: max-level uniform mesh (Option A) | `baseline = 4 × 2^max_level` elements with self-consistent dt. Protocol-independent — same baseline for burn-in and fixed-ref. Old baseline used `actual_initial_elements` which was circular for burn-in (baseline depends on model's own burn-in result). |
+| 2025-02-17 | Move roadmap and experiment logs to `research_logs/` directory | Avoids cluttering repo root as experiment logs accumulate across Threads 1–3. Both roadmap and logs live together since they're tightly coupled. |
+| 2025-02-17 | First batch eval config: budget=100, max_level=6, icase=1 | Matches existing fixed-ref plot (ref6/budget100/max6) for direct comparison. Primary hypothesis: horizontal band of poorly-performing models disappears with burn-in. |
 
 ---
 
@@ -230,8 +234,8 @@ Quick-reference status of all experiments. Updated each session.
 
 | ID | Name | Status | Key Finding | Log File |
 |----|------|--------|-------------|----------|
-| 1.1 | Burn-in diagnostics | Complete | 8/10 converge (rounds 5–9); 2/10 oscillate (constraint artifact); zero net change × 3 is viable stopping criterion. See F1–F5. | `EXP_LOG_1_1_burnin_diagnostics.md` |
-| 1.2 | Stopping criterion | Ready | — | — |
+| 1.1 | Burn-in diagnostics | Complete | 8/10 converge (rounds 5–9); 2/10 oscillate (constraint artifact); zero net change × 3 is viable stopping criterion. See F1–F5. | `research_logs/EXP_LOG_1_1_burnin_diagnostics.md` |
+| 1.2 | Stopping criterion | In Progress | Burn-in init implemented in `run_single_model()` and `evaluate_single_model_by_index.py`. Local tests pass. Cost_ratio baseline updated to max-level uniform mesh. Batch eval pending. | `research_logs/EXP_LOG_1_2_stopping_criterion.md` |
 | 1.3 | Burn-in vs full-ref | Not started | — | — |
 | 1.4 | Adaptation regime | Not started | — | — |
 | 2.1 | Remove solution_values | Not started | — | — |
@@ -249,6 +253,7 @@ Quick-reference status of all experiments. Updated each session.
 | R.1 | 2025-02-13 | Bug fixes, model selection, implementation planning | Completed repo cleanup (Session 5.3 bug fixes), selected 10 models for Exp 1.1 via Stage 3 label mapping, planned `mark_and_adapt_single_round()` modification and burn-in implementation, created branch `feature/burnin-evaluation` | Models verified on both Mac and Borah. Implementation deferred to next session with detailed handoff. |
 | R.2 | 2025-02-13 | Burn-in implementation + exploratory runs | Implemented all Phase A–H changes: dict return type, burn-in diagnostics function, CLI flags, verbose fix. Pushed branch. Created `visualize_burnin.py` animation script. Ran exploratory experiments varying max_level and budget that produced key findings F1–F3. | NumPy 2.x incompatibility with PyTorch 2.2 required `numpy<2` downgrade on Mac. |
 | R.3 | 2025-02-16 | Full 10-model diagnostic + unconstrained oscillator tests | Committed `visualize_burnin.py`. Ran full 10-model batch diagnostic on Borah (SLURM array). 8/10 converge, 2/10 oscillate. Ran unconstrained tests on oscillators — both converge when unconstrained, confirming constraint artifact (F4). Discovered persistent mesh churn in r6 (F5). Experiment 1.1 complete. | 3-day gap since R.2. SLURM scripts created directly on Borah (gitignored). r6 unconstrained run took ~25 min due to high element count (333) with persistent churn. |
+| R.4 | 2025-02-17 | Burn-in init implementation (Exp 1.2) | Implemented burn-in init path in `run_single_model()` with `--burnin-init`, `--burnin-rounds`, `--burnin-convergence-patience` CLI args. Updated all visualization functions with `burnin_metadata` passthrough. Updated `evaluate_single_model_by_index.py` with optional burnin arg and CSV columns. Decoupled verbose from solver/adapter. Fixed duplicate Training Parameters prefix. Updated cost_ratio to max-level uniform baseline. Created `research_logs/` directory, moved roadmap and logs there. Local tests pass for both burn-in and fixed-ref paths. | First session with filesystem MCP read/write. Cost_ratio baseline change discussed — Option A (max-level uniform) chosen for protocol independence. Advisor consulted via Slack. |
 
 ---
 

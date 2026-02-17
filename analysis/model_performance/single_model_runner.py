@@ -202,30 +202,42 @@ def create_parameter_title(training_params):
     else:
         return "Training Parameters: Unknown"
 
-def create_simulation_config_title(solver, initial_refinement=None, element_budget=None):
+def create_simulation_config_title(solver, initial_refinement=None, element_budget=None,
+                                   burnin_metadata=None):
     """Create formatted simulation configuration string for plot titles.
     
     Generates a human-readable title string showing the evaluation configuration
-    parameters (distinct from training parameters).
+    parameters (distinct from training parameters). When burn-in initialization
+    was used, displays burn-in summary instead of initial refinement level.
     
     Args:
         solver: Solver instance with configuration attributes (initial_refinement,
             element_budget, max_level).
         initial_refinement: Initial refinement level override. If None, attempts
-            to read from solver.initial_refinement.
+            to read from solver.initial_refinement. Ignored when burnin_metadata
+            is provided.
         element_budget: Element budget override. If None, attempts to read
             from solver.element_budget.
+        burnin_metadata: Dictionary with burn-in results from run_single_model(),
+            or None if fixed refinement was used. If provided, replaces the
+            "initial refinement level" display with a burn-in summary showing
+            rounds used and convergence status.
     
     Returns:
-        str: Formatted configuration string showing initial refinement level,
-            element budget, and max refinement level. Returns error message
-            if attributes cannot be accessed.
+        str: Formatted configuration string. Shows either initial refinement
+            level (fixed refinement) or burn-in summary, plus element budget
+            and max refinement level. Returns error message if attributes
+            cannot be accessed.
     
     Example:
-        >>> title = create_simulation_config_title(solver, 
-        ...     initial_refinement=4, element_budget=80)
-        >>> # Returns: "Simulation Configuration: initial refinement level: 4, 
-        >>> #          element budget: 80, max refinement level: 5"
+        >>> # Fixed refinement:
+        >>> title = create_simulation_config_title(solver, initial_refinement=4)
+        >>> # Returns: "Simulation Configuration: initial refinement level: 4, ..."
+        >>> 
+        >>> # Burn-in initialization:
+        >>> title = create_simulation_config_title(solver, burnin_metadata={
+        ...     'rounds_used': 7, 'converged': True})
+        >>> # Returns: "Simulation Configuration: burn-in init (7 rounds, converged), ..."
     """
     try:
         # Use passed parameters if available, otherwise try to get from solver
@@ -237,13 +249,20 @@ def create_simulation_config_title(solver, initial_refinement=None, element_budg
         )
         max_level = solver.max_level if hasattr(solver, 'max_level') else "Unknown"
         
-        return f"Simulation Configuration: initial refinement level: {initial_ref}, element budget: {budget}, max refinement level: {max_level}"
+        # Display burn-in summary or initial refinement level
+        if burnin_metadata:
+            init_str = (f"burn-in init ({burnin_metadata['rounds_used']} rounds, "
+                       f"{'converged' if burnin_metadata['converged'] else 'max rounds'})")
+        else:
+            init_str = f"initial refinement level: {initial_ref}"
+        
+        return f"Simulation Configuration: {init_str}, element budget: {budget}, max refinement level: {max_level}"
     except Exception as e:
         return f"Simulation Configuration: Error ({str(e)})"
 
 def create_animation(times, solutions, grids, coords, solver, training_params, 
                     include_exact=True, output_dir=None, model_path=None, 
-                    initial_refinement=None, element_budget=None):
+                    initial_refinement=None, element_budget=None, burnin_metadata=None):
     """Create and save animation of the simulation results.
     
     Generates an MP4 animation showing the evolution of the numerical solution
@@ -262,6 +281,9 @@ def create_animation(times, solutions, grids, coords, solver, training_params,
         model_path: Path to model file for filename generation.
         initial_refinement: Initial refinement level for title display.
         element_budget: Element budget for title display.
+        burnin_metadata: Burn-in results dict from run_single_model(), or None.
+            Passed through to create_simulation_config_title() for display in
+            the animation title.
         
     Returns:
         str or None: Path to saved animation file, or None if not saved.
@@ -281,7 +303,7 @@ def create_animation(times, solutions, grids, coords, solver, training_params,
     
     # Create title
     param_str = create_parameter_title(training_params)
-    sim_config_str = create_simulation_config_title(solver, initial_refinement, element_budget)
+    sim_config_str = create_simulation_config_title(solver, initial_refinement, element_budget, burnin_metadata)
     title = f'Model Evaluation Animation\n{param_str}\n{sim_config_str}'
     fig.suptitle(title, fontsize=14, fontweight='bold')
     
@@ -380,7 +402,7 @@ def create_animation(times, solutions, grids, coords, solver, training_params,
 
 def create_snapshot(times, solutions, grids, coords, solver, training_params,
                    include_exact=True, output_dir=None, model_path=None, n_snapshots=5,
-                   initial_refinement=None, element_budget=None):
+                   initial_refinement=None, element_budget=None, burnin_metadata=None):
     """Create snapshot plot with multiple timesteps.
     
     Generates a multi-panel figure showing the solution at evenly-spaced
@@ -400,6 +422,9 @@ def create_snapshot(times, solutions, grids, coords, solver, training_params,
         n_snapshots: Number of timesteps to show. Defaults to 5.
         initial_refinement: Initial refinement level for title display.
         element_budget: Element budget for title display.
+        burnin_metadata: Burn-in results dict from run_single_model(), or None.
+            Passed through to create_simulation_config_title() for display in
+            the snapshot title.
         
     Returns:
         str or None: Path to saved plot file, or None if not saved.
@@ -423,7 +448,7 @@ def create_snapshot(times, solutions, grids, coords, solver, training_params,
     
     # Create title
     param_str = create_parameter_title(training_params)
-    sim_config_str = create_simulation_config_title(solver, initial_refinement, element_budget)
+    sim_config_str = create_simulation_config_title(solver, initial_refinement, element_budget, burnin_metadata)
     title = f'Model Evaluation Animation\n{param_str}\n{sim_config_str}'
     fig.suptitle(title, fontsize=14, fontweight='bold')
     
@@ -487,7 +512,8 @@ def create_snapshot(times, solutions, grids, coords, solver, training_params,
     return plot_path
 
 def create_final_plot(solver, results, training_params, include_exact=True, 
-                     output_dir=None, model_path=None, initial_refinement=None, element_budget=None):
+                     output_dir=None, model_path=None, initial_refinement=None, 
+                     element_budget=None, burnin_metadata=None):
     """Create final timestep plot with metrics.
     
     Generates a single-panel figure showing the final state of the simulation
@@ -504,6 +530,10 @@ def create_final_plot(solver, results, training_params, include_exact=True,
         model_path: Path to model file for filename generation.
         initial_refinement: Initial refinement level for title display.
         element_budget: Element budget for title display.
+        burnin_metadata: Burn-in results dict from run_single_model(), or None.
+            Passed through to create_simulation_config_title() for title display.
+            When provided, burn-in details are also appended to the metrics
+            text box overlay.
         
     Returns:
         str or None: Path to saved plot file, or None if not saved.
@@ -524,7 +554,7 @@ def create_final_plot(solver, results, training_params, include_exact=True,
     
     # Create title
     param_str = create_parameter_title(training_params)
-    sim_config_str = create_simulation_config_title(solver, initial_refinement, element_budget)
+    sim_config_str = create_simulation_config_title(solver, initial_refinement, element_budget, burnin_metadata)
     title = f'Model Evaluation Animation\n{param_str}\n{sim_config_str}'
     fig.suptitle(title, fontsize=14, fontweight='bold')
     
@@ -551,19 +581,26 @@ def create_final_plot(solver, results, training_params, include_exact=True,
     initial_elements = results['simulation_metrics']['initial_elements']  # Now correct!
     
     metrics_text = f"""Evaluation Metrics:
-L2 Error (mesh-dependent): {results['final_l2_error']:.6e}
-L2 Error (grid-normalized): {results['grid_normalized_l2_error']:.6e}
-Total Cost: {results['total_cost']}
-Initial Elements: {initial_elements}
-Final Elements: {results['final_elements']}
-Total Adaptations: {results['total_adaptations']}
-Final Time: {results['simulation_metrics']['final_time']:.3f}"""
+        L2 Error (mesh-dependent): {results['final_l2_error']:.6e}
+        L2 Error (grid-normalized): {results['grid_normalized_l2_error']:.6e}
+        Total Cost: {results['total_cost']}
+        Initial Elements: {initial_elements}
+        Final Elements: {results['final_elements']}
+        Total Adaptations: {results['total_adaptations']}
+        Final Time: {results['simulation_metrics']['final_time']:.3f}"""
+    
+    # Append burn-in details if burn-in initialization was used
+    if burnin_metadata:
+        status = "converged" if burnin_metadata['converged'] else "max rounds"
+        metrics_text += f"""
+        Burn-in: {burnin_metadata['rounds_used']} rounds ({status})
+        Post-burn-in Elements: {burnin_metadata['final_burnin_elements']}"""
     
     if include_exact:
         pointwise_error = np.abs(solver.q - final_exact)
         metrics_text += f"""
-Max Error: {np.max(pointwise_error):.6e}
-Mean Error: {np.mean(pointwise_error):.6e}"""
+        Max Error: {np.max(pointwise_error):.6e}
+        Mean Error: {np.mean(pointwise_error):.6e}"""
     
     ax.text(0.02, 0.98, metrics_text, transform=ax.transAxes, 
             verticalalignment='top', fontsize=10,
@@ -593,7 +630,8 @@ Mean Error: {np.mean(pointwise_error):.6e}"""
 
 def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5, 
                     nop=4, courant_max=0.1, icase=1, plot_mode=None, include_exact=True,
-                    verbose=False, output_dir=None, initial_refinement=0):
+                    verbose=False, output_dir=None, initial_refinement=0,
+                    burnin_init=False, burnin_rounds=15, burnin_convergence_patience=3):
     """Run a single model evaluation with comprehensive metrics collection.
     
     This is the main entry point for programmatic model evaluation. Loads a
@@ -615,6 +653,16 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
         output_dir: Directory to save plots. Required if plot_mode is set.
         initial_refinement: Initial uniform refinement level to apply before
             simulation. 0 means no initial refinement. Defaults to 0.
+        burnin_init: If True, use burn-in initialization instead of fixed
+            refinement. Model iteratively adapts from base mesh until
+            convergence or max rounds reached. Mutually exclusive with
+            initial_refinement > 0; burn-in takes precedence with a warning.
+            Defaults to False.
+        burnin_rounds: Maximum number of burn-in adaptation rounds. Each round
+            consists of one call to mark_and_adapt_single_round() followed by
+            solution reinitialization. Defaults to 15.
+        burnin_convergence_patience: Number of consecutive zero-net-change
+            rounds required to declare convergence. Defaults to 3.
         
     Returns:
         dict: Comprehensive evaluation results containing:
@@ -630,6 +678,10 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
                 - element_count_history, adaptation_count_history
                 - model_path, number_of_timesteps
                 - no_amr_baseline_cost, cost_ratio
+                - burnin_metadata: dict or None. Present when burnin_init=True, with:
+                converged (bool), convergence_round (int or None),
+                rounds_used (int), final_burnin_elements (int),
+                burnin_rounds_max (int), burnin_convergence_patience (int)
             - plot_path: Path to saved plot (if plot_mode is set)
     
     Raises:
@@ -678,7 +730,7 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
         courant_max=courant_max,
         icase=icase,
         periodic=True,
-        verbose=verbose
+        verbose=False
     )
 
     # Initialize ModelMarkerEvaluation with trained model
@@ -686,7 +738,7 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
         model_path=model_path,
         solver=solver,
         element_budget=element_budget,
-        verbose=verbose
+        verbose=False
     )
 
     if verbose:
@@ -695,8 +747,80 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
         print(f"Initial active elements: {len(solver.active)}")
 
 
-    # Apply initial refinement if requested
-    if initial_refinement > 0:
+    # --- Mesh initialization: burn-in OR fixed refinement (mutually exclusive) ---
+    # Burn-in lets the model build the mesh from the base 4-element grid by
+    # iteratively adapting and reinitializing until convergence or max rounds.
+    # Fixed refinement uniformly refines all elements to a specified level.
+    # When neither is requested, timestepping starts from the base mesh.
+    burnin_metadata = None
+    
+    if burnin_init:
+        # Burn-in initialization: model iteratively adapts from base mesh
+        if initial_refinement > 0:
+            print("Warning: --burnin-init and --initial-refinement both set. "
+                  "Burn-in takes precedence; initial_refinement ignored.")
+        
+        if verbose:
+            print(f"\n=== BURN-IN INITIALIZATION ===")
+            print(f"Max rounds: {burnin_rounds}, Patience: {burnin_convergence_patience}")
+            print(f"Starting elements: {len(solver.active)}")
+        
+        consecutive_zero_change = 0
+        burnin_converged = False
+        burnin_convergence_round = None
+        
+        for round_num in range(1, burnin_rounds + 1):
+            elements_before = len(solver.active)
+            
+            # One adaptation round — model sees current mesh and decides
+            adaptation_result = model_adapter.mark_and_adapt_single_round()
+            
+            elements_after = len(solver.active)
+            net_change = elements_after - elements_before
+            
+            if verbose:
+                print(f"  Round {round_num}: {elements_before} -> {elements_after} "
+                      f"(net: {net_change:+d}, "
+                      f"R:{adaptation_result['refinements']} "
+                      f"C:{adaptation_result['coarsenings']} "
+                      f"N:{adaptation_result['do_nothings']})")
+            
+            # Convergence check: zero net change for N consecutive rounds
+            if net_change == 0:
+                consecutive_zero_change += 1
+                if consecutive_zero_change >= burnin_convergence_patience:
+                    burnin_converged = True
+                    burnin_convergence_round = round_num - burnin_convergence_patience + 1
+                    if verbose:
+                        print(f"  *** Burn-in converged at round {burnin_convergence_round} "
+                              f"(confirmed over {burnin_convergence_patience} rounds) ***")
+                    break
+            else:
+                consecutive_zero_change = 0
+            
+            # Reinitialize exact solution on adapted mesh so next round
+            # sees correct solution values for the current grid
+            solver.q = solver._initialize_solution()
+        
+        # Final reinitialization to ensure clean state for timestepping
+        solver.q = solver._initialize_solution()
+        
+        burnin_metadata = {
+            'converged': burnin_converged,
+            'convergence_round': burnin_convergence_round,
+            'rounds_used': round_num,
+            'final_burnin_elements': len(solver.active),
+            'burnin_rounds_max': burnin_rounds,
+            'burnin_convergence_patience': burnin_convergence_patience,
+        }
+        
+        if verbose:
+            status = "converged" if burnin_converged else "max rounds reached"
+            print(f"  Burn-in complete ({status}): {len(solver.active)} elements")
+            print(f"=== END BURN-IN ===\n")
+    
+    elif initial_refinement > 0:
+        # Fixed refinement initialization (existing behavior, unchanged)
         initial_elements = len(solver.active)
         projected_elements = initial_elements * (2 ** initial_refinement)
         
@@ -747,16 +871,12 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
     while solver.time < time_final:
         dt = min(solver.dt, time_final - solver.time)
         
-        if verbose:
-            print(f"\nTimestep {step_count}, Time: {solver.time:.3f}")
         
         # Apply mesh adaptation using single round approach
         adaptation_result = model_adapter.mark_and_adapt_single_round()
         adaptations_made = adaptation_result['adaptations']
         total_adaptations += adaptations_made
         
-        if verbose:
-            print(f"Made {adaptations_made} adaptations in this timestep")
         
         # Take normal time step (no domain fraction jumps)
         solver.step(dt)
@@ -785,10 +905,18 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
     # Calculate total computational cost (sum of element counts across all timesteps)
     total_cost = sum(element_counts)
 
-    # Calculate cost ratio against no-AMR baseline
+
+    # Calculate cost ratio against uniform max-level baseline.
+    # Baseline: "what if we ran a uniform mesh at max_level with no AMR?"
+    # Protocol-independent — same baseline for burn-in and fixed-ref.
     import math
-    number_of_timesteps = math.ceil(time_final / solver.dt)
-    no_amr_baseline_cost = actual_initial_elements * number_of_timesteps
+    base_elements = 4  # From xelem = [-1, -0.4, 0, 0.4, 1]
+    baseline_elements = base_elements * (2 ** max_level)
+    dx_min_baseline = min(np.diff(xelem)) / (2 ** max_level)
+    dt_baseline = courant_max * dx_min_baseline / solver.wave_speed
+    baseline_timesteps = math.ceil(time_final / dt_baseline)
+    no_amr_baseline_cost = baseline_elements * baseline_timesteps
+    number_of_timesteps = step_count
     cost_ratio = total_cost / no_amr_baseline_cost
 
     # Validation check - cost ratio should never exceed 1.0
@@ -817,9 +945,10 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
             'adaptation_count_history': adaptation_counts,
             'model_path': model_path,
             'number_of_timesteps': number_of_timesteps,      
-            'no_amr_baseline_cost': no_amr_baseline_cost,    
+             'no_amr_baseline_cost': no_amr_baseline_cost,    
             'cost_ratio': cost_ratio 
-        }
+        },
+        'burnin_metadata': burnin_metadata  # None when burn-in not used
     }
     
     # Create plots based on mode
@@ -827,26 +956,28 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
         if plot_mode == 'animate' and collect_full_history:
             plot_path = create_animation(times, solutions, grids, coords, solver, 
                                     training_params, include_exact, output_dir, model_path,
-                                    initial_refinement, element_budget)
+                                    initial_refinement, element_budget, burnin_metadata)
             results['plot_path'] = plot_path
             
         elif plot_mode == 'snapshot' and collect_full_history:
             plot_path = create_snapshot(times, solutions, grids, coords, solver,
                                     training_params, include_exact, output_dir, model_path,
-                                    initial_refinement=initial_refinement, element_budget=element_budget)
+                                    initial_refinement=initial_refinement, 
+                                    element_budget=element_budget,
+                                    burnin_metadata=burnin_metadata)
             results['plot_path'] = plot_path
             
         elif plot_mode == 'final':
             plot_path = create_final_plot(solver, results, training_params,
                                         include_exact, output_dir, model_path,
-                                        initial_refinement, element_budget)
+                                        initial_refinement, element_budget,
+                                        burnin_metadata)
             results['plot_path'] = plot_path
     
     if verbose:
         print(f"\n=== EVALUATION COMPLETE ===")
         if training_params:
-            param_str = create_parameter_title(training_params)
-            print(f"Training Parameters: {param_str}")
+            print(create_parameter_title(training_params))
         print(f"Final L2 Error: {final_l2_error:.6e}")
         print(f"Final Grid-Normalized L2 Error: {grid_normalized_l2_error:.6e}")
         print(f"Total Cost: {total_cost}")
@@ -903,7 +1034,7 @@ def run_burnin_diagnostics(model_path, max_rounds=20, element_budget=50,
         print(f"Max rounds: {max_rounds}, Budget: {element_budget}")
         print(f"Max level: {max_level}, icase: {icase}")
         if training_params:
-            print(f"Training params: {training_params}")
+            print(create_parameter_title(training_params))
     
     # Initialize solver — base mesh, NO initial refinement
     # xelem matches run_single_model() and transferability_runner: 4 base elements on [-1, 1]
@@ -1095,6 +1226,15 @@ def main():
     parser.add_argument('--burnin-output', 
                        help='Save burn-in results to JSON file')
     
+    # Burn-in initialization options (for normal evaluation with burn-in start)
+    parser.add_argument('--burnin-init', action='store_true',
+                       help='Use burn-in initialization instead of fixed refinement. '
+                            'Model iteratively adapts from base mesh before timestepping.')
+    parser.add_argument('--burnin-rounds', type=int, default=15,
+                       help='Maximum burn-in rounds for --burnin-init (default: 15)')
+    parser.add_argument('--burnin-convergence-patience', type=int, default=3,
+                       help='Consecutive zero-change rounds to declare convergence (default: 3)')
+    
     # Plotting options
     parser.add_argument('--plot-mode', choices=['animate', 'snapshot', 'final'], 
                        help='Plotting mode: animate (full animation), snapshot (multiple timesteps), final (final timestep only)')
@@ -1162,14 +1302,16 @@ def main():
         include_exact=args.include_exact,
         verbose=args.verbose,
         output_dir=output_dir,
-        initial_refinement=args.initial_refinement
+        initial_refinement=args.initial_refinement,
+        burnin_init=args.burnin_init,
+        burnin_rounds=args.burnin_rounds,
+        burnin_convergence_patience=args.burnin_convergence_patience
     )
     
     # Print summary
     print(f"\n=== EVALUATION SUMMARY ===")
     if 'training_parameters' in results and results['training_parameters']:
-        param_str = create_parameter_title(results['training_parameters'])
-        print(f"Training Parameters: {param_str}")
+        print(create_parameter_title(results['training_parameters']))
 
     print(f"Model: {args.model_path}")
     print(f"Final L2 Error: {results['final_l2_error']:.6e}")
