@@ -49,7 +49,7 @@ def mock_sweep_dir():
     temp_dir = tempfile.mkdtemp()
     sweep_name = 'test_sweep'
     
-    results_dir = os.path.join(temp_dir, 'analysis', 'data', 'model_performance', sweep_name)
+    results_dir = os.path.join(temp_dir, 'analysis', 'data', 'model_performance', sweep_name, 'fixed_ref')
     os.makedirs(results_dir, exist_ok=True)
     
     # Create mock data with known properties
@@ -327,7 +327,7 @@ class TestErrorHandling:
         temp_dir, sweep_name, csv_filename = mock_sweep_dir
         
         # Create CSV missing required column
-        results_dir = os.path.join(temp_dir, 'analysis', 'data', 'model_performance', sweep_name)
+        results_dir = os.path.join(temp_dir, 'analysis', 'data', 'model_performance', sweep_name, 'fixed_ref')
         bad_csv = os.path.join(results_dir, 'bad_data.csv')
         pd.DataFrame({'gamma_c': [1, 2], 'other': [3, 4]}).to_csv(bad_csv, index=False)
         

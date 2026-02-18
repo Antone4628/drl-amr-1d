@@ -149,7 +149,7 @@ class KeyModelsAnalyzer:
     >>> print(f"Global flagship: {flagships['global_flagship']['config_id']}")
     """
     
-    def __init__(self, sweep_name, output_subdir="uniform_initial_max", output_format='png', verbose=True):
+    def __init__(self, sweep_name, output_subdir="uniform_initial_max", output_format='png', verbose=True, protocol='fixed_ref'):
         """
         Initialize the key models analyzer.
         
@@ -176,8 +176,9 @@ class KeyModelsAnalyzer:
         self.stage3_baselines = False  
         self.stage3_labels = False
         
-        # Set up paths
-        self.data_dir = os.path.join(PROJECT_ROOT, 'analysis', 'data', 'model_performance', sweep_name)
+        # Set up paths — protocol-specific subdirectory
+        self.protocol = protocol
+        self.data_dir = os.path.join(PROJECT_ROOT, 'analysis', 'data', 'model_performance', sweep_name, protocol)
         self.aggregate_dir = os.path.join(self.data_dir, 'aggregate_results')
         self.output_dir = os.path.join(self.aggregate_dir, 'aggregate_analysis', output_subdir)
         
@@ -373,18 +374,23 @@ class KeyModelsAnalyzer:
         Parse configuration information from config_id column.
         
         Extracts initial_refinement, evaluation_element_budget, and max_level
-        from the config_id string (e.g., 'ref4_budget80_max4').
+        from the config_id string. Handles both fixed-ref format
+        (e.g., 'ref4_budget80_max4') and burn-in format
+        (e.g., 'burnin_budget100_max6').
         
         Args:
             df: DataFrame with 'config_id' column.
         
         Returns:
             pandas.DataFrame: Input DataFrame with added columns for parsed
-                configuration values.
+                configuration values. For burn-in configs, initial_refinement
+                is set to NaN.
         """
         # Extract configuration details from config_id if not already present
         if 'initial_refinement' not in df.columns:
-            df['initial_refinement'] = df['config_id'].str.extract(r'ref(\d+)').astype(int)
+            # ref(\d+) returns NaN for burn-in configs, which is correct
+            extracted = df['config_id'].str.extract(r'ref(\d+)')
+            df['initial_refinement'] = pd.to_numeric(extracted[0], errors='coerce')
         if 'evaluation_element_budget' not in df.columns:
             df['evaluation_element_budget'] = df['config_id'].str.extract(r'budget(\d+)').astype(int)
         if 'max_level' not in df.columns:
@@ -2004,6 +2010,8 @@ def main():
                     help='Output format for plots')
     parser.add_argument('--verbose', action='store_true', default=True,
                     help='Enable verbose output')
+    parser.add_argument('--protocol', choices=['fixed_ref', 'burnin'], default='fixed_ref',
+                        help='Evaluation protocol subdirectory (default: fixed_ref)')
     parser.add_argument('--selected-models', 
                 help='Comma-separated list of model labels for manual flagship plot (e.g., "b3,g7,r2")')
     parser.add_argument('--stage3-no-ideal', action='store_true',
@@ -2020,8 +2028,10 @@ def main():
         sweep_name=args.sweep_name,
         output_subdir=args.output_subdir,
         output_format=args.output_format,
-        verbose=args.verbose
+        verbose=args.verbose,
+        protocol=args.protocol
     )
+    
     if args.selected_models:
         analyzer.selected_models = [m.strip() for m in args.selected_models.split(',')]
     analyzer.stage3_no_ideal = args.stage3_no_ideal

@@ -29,8 +29,17 @@ Example SLURM submission:
     python evaluate_single_model_by_index.py $SLURM_ARRAY_TASK_ID session4_100k_uniform 0 50 5 1 1
 
 Output:
-    - JSON file: {model_dir}_ref_{initial_refinement}_budget_{element_budget}_results.json
-    - CSV row appended to: model_results_ref{initial_refinement}_budget{element_budget}_max{max_level}.csv
+    Results are written to protocol-specific subdirectories:
+        analysis/data/model_performance/{sweep_name}/fixed_ref/   (fixed refinement)
+        analysis/data/model_performance/{sweep_name}/burnin/      (burn-in initialization)
+
+    Fixed refinement:
+        - JSON: {model_dir}_ref_{initial_refinement}_budget_{element_budget}_results.json
+        - CSV:  model_results_ref{initial_refinement}_budget{element_budget}_max{max_level}.csv
+
+    Burn-in initialization:
+        - JSON: {model_dir}_burnin_budget_{element_budget}_results.json
+        - CSV:  model_results_burnin_budget{element_budget}_max{max_level}.csv
 
 See Also:
     single_model_runner: Core evaluation logic called by this script.
@@ -121,20 +130,29 @@ def main():
         initial_refinement=0 if use_burnin else initial_refinement,
         burnin_init=use_burnin,
     )
-    
-    # Save individual results
-    output_dir = os.path.join(PROJECT_ROOT, 'analysis', 'data', 'model_performance', sweep_name)
+
+    # Save individual results — protocol-specific subdirectory
+    eval_protocol = 'burnin' if use_burnin else 'fixed_ref'
+    output_dir = os.path.join(PROJECT_ROOT, 'analysis', 'data', 'model_performance', sweep_name, eval_protocol)
     os.makedirs(output_dir, exist_ok=True)
     
-    # Save detailed JSON with both parameters in filename
-    json_file = os.path.join(output_dir, f'{model_dir}_ref_{initial_refinement}_budget_{element_budget}_results.json')
+    # Save detailed JSON — filename reflects protocol
+    if use_burnin:
+        json_file = os.path.join(output_dir, f'{model_dir}_burnin_budget_{element_budget}_results.json')
+    else:
+        json_file = os.path.join(output_dir, f'{model_dir}_ref_{initial_refinement}_budget_{element_budget}_results.json')
     with open(json_file, 'w') as f:
         json.dump(results, f, indent=2, default=str)
     
-    # Append to CSV (separate file for each configuration)
-    csv_file = os.path.join(output_dir, f'model_results_ref{initial_refinement}_budget{element_budget}_max{max_level}.csv')
+    # Append to CSV (separate file for each configuration) — filename reflects protocol
+    if use_burnin:
+        csv_file = os.path.join(output_dir, f'model_results_burnin_budget{element_budget}_max{max_level}.csv')
+    else:
+        csv_file = os.path.join(output_dir, f'model_results_ref{initial_refinement}_budget{element_budget}_max{max_level}.csv')
+
     training_params = results['training_parameters']
-    
+
+
     # Create CSV row
     csv_row = [
         training_params['gamma_c'],

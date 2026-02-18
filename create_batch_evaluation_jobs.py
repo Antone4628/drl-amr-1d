@@ -72,7 +72,7 @@ def validate_sweep_models(sweep_name):
     return len(model_dirs)
 
 
-def create_slurm_job(refinement_level, element_budget, max_level, sweep_name, icase=1, num_models=81):
+def create_slurm_job(refinement_level, element_budget, max_level, sweep_name, icase=1, num_models=81, burnin=False):
     """Create a SLURM job file for a specific evaluation configuration.
     
     Reads the batch evaluation template and substitutes placeholders with
@@ -85,6 +85,8 @@ def create_slurm_job(refinement_level, element_budget, max_level, sweep_name, ic
         max_level: Maximum refinement level permitted during adaptation.
         sweep_name: Name of the parameter sweep containing trained models.
         icase: Test case identifier for initial condition (default: 1 for Gaussian).
+        num_models: Number of models in the sweep (default: 81).
+        burnin: If True, use burn-in initialization instead of fixed refinement.
     
     Returns:
         Path to the created SLURM job file.
@@ -99,6 +101,7 @@ def create_slurm_job(refinement_level, element_budget, max_level, sweep_name, ic
         - ICASE
         - PROJECT_ROOT_PLACEHOLDER
         - NUM_MODELS
+        - BURNIN_FLAG
     """
     # Read template
     template_file = 'slurm_scripts/batch_model_evaluation_template.slurm'
@@ -113,13 +116,19 @@ def create_slurm_job(refinement_level, element_budget, max_level, sweep_name, ic
     job_content = job_content.replace('ICASE', str(icase))
     job_content = job_content.replace('PROJECT_ROOT_PLACEHOLDER', PROJECT_ROOT)
     job_content = job_content.replace('NUM_MODELS', str(num_models))
+    job_content = job_content.replace('BURNIN_FLAG', '1' if burnin else '')
+    job_content = job_content.replace('EVAL_PROTOCOL', 'burnin' if burnin else f'ref_{refinement_level}')
     
-    # Write job file
-    job_file = f'slurm_scripts/batch_model_evaluation_ref_{refinement_level}_budget_{element_budget}.slurm'
+    # Write job file — filename reflects protocol
+    if burnin:
+        job_file = f'slurm_scripts/batch_model_evaluation_burnin_budget_{element_budget}.slurm'
+    else:
+        job_file = f'slurm_scripts/batch_model_evaluation_ref_{refinement_level}_budget_{element_budget}.slurm'
     with open(job_file, 'w') as f:
         f.write(job_content)
     
-    print(f"Created {job_file} for sweep: {sweep_name}")
+    protocol_str = 'burnin' if burnin else f'ref_{refinement_level}'
+    print(f"Created {job_file} for sweep: {sweep_name} ({protocol_str})")
     return job_file
 
 
@@ -135,13 +144,16 @@ def main():
         description='Generate SLURM batch evaluation jobs for different initial refinement levels and element budgets.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  # Generate job for session4 sweep
-  python create_batch_evaluation_jobs.py 4,80,4 --sweep-name session4_100k_uniform
-  
-  # Generate multiple configurations
-  python create_batch_evaluation_jobs.py 4,80,4 5,150,5 --sweep-name session4_100k_uniform
-        """
+        Examples:
+        # Generate fixed-ref job for session4 sweep
+        python create_batch_evaluation_jobs.py 4,80,4 --sweep-name session4_100k_uniform
+        
+        # Generate burn-in job
+        python create_batch_evaluation_jobs.py 0,100,6 --sweep-name session4_100k_uniform --burnin
+        
+        # Generate multiple fixed-ref configurations
+        python create_batch_evaluation_jobs.py 4,80,4 5,150,5 --sweep-name session4_100k_uniform
+                """
     )
     
     parser.add_argument(
@@ -162,6 +174,15 @@ Examples:
         default=1,
         help='Test case identifier (default: 1 for Gaussian, 16 for Mexican hat)'
     )
+
+    parser.add_argument(
+        '--burnin',
+        action='store_true',
+        help='Use burn-in initialization instead of fixed refinement. '
+             'When set, refinement_level in configs is ignored and models '
+             'build their mesh from the base grid via iterative adaptation.'
+    )
+    
     
     args = parser.parse_args()
     
@@ -183,15 +204,18 @@ Examples:
     # Calculate expected initial elements for each config
     print("Configuration analysis:")
     for refinement_level, element_budget, max_level in configs:
-        base_elements = 4
-        expected_initial = base_elements * (2 ** refinement_level)
-        status = "✓ OK" if expected_initial < element_budget else "⚠ OVER BUDGET"
-        print(f"  ref_{refinement_level}, budget_{element_budget}, maxlvl_{max_level}: {expected_initial} initial elements {status}")
+        if args.burnin:
+            print(f"  burnin, budget_{element_budget}, maxlvl_{max_level}: starts from 4-element base mesh")
+        else:
+            base_elements = 4
+            expected_initial = base_elements * (2 ** refinement_level)
+            status = "✓ OK" if expected_initial < element_budget else "⚠ OVER BUDGET"
+            print(f"  ref_{refinement_level}, budget_{element_budget}, maxlvl_{max_level}: {expected_initial} initial elements {status}")
     print()
     
     job_files = []
     for refinement_level, element_budget, max_level in configs: 
-        job_file = create_slurm_job(refinement_level, element_budget, max_level, sweep_name, args.icase, num_models)
+        job_file = create_slurm_job(refinement_level, element_budget, max_level, sweep_name, args.icase, num_models, burnin=args.burnin)
         job_files.append((job_file, refinement_level, element_budget, max_level))
     
     print(f"\nCreated {len(job_files)} job files.")
@@ -199,9 +223,12 @@ Examples:
     for job_file, ref, budget, max_lvl in job_files:
         print(f"sbatch {job_file}")
     
-    print(f"\nResults will be saved as:")
+    print(f"\nResults will be saved to: analysis/data/model_performance/{sweep_name}/{'burnin' if args.burnin else 'fixed_ref'}/")
     for _, ref, budget, max_lvl in job_files:
-        print(f"  model_results_ref{ref}_budget{budget}_max{max_lvl}.csv")
+        if args.burnin:
+            print(f"  model_results_burnin_budget{budget}_max{max_lvl}.csv")
+        else:
+            print(f"  model_results_ref{ref}_budget{budget}_max{max_lvl}.csv")
 
 
 if __name__ == "__main__":

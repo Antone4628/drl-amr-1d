@@ -237,7 +237,8 @@ class ComprehensiveAnalyzer:
     """
     
     def __init__(self, sweep_name, input_file=None, verbose=False, 
-             include_baselines=False, baseline_methods=None, baseline_config=None, custom_output_dir=None):
+             include_baselines=False, baseline_methods=None, baseline_config=None, custom_output_dir=None,
+             protocol='fixed_ref'):
         """
         Initialize the comprehensive analyzer.
         
@@ -269,8 +270,9 @@ class ComprehensiveAnalyzer:
         self.sweep_name = sweep_name
         self.verbose = verbose
         
-        # Set up paths
-        self.results_dir = os.path.join(PROJECT_ROOT, 'analysis', 'data', 'model_performance', sweep_name)
+        # Set up paths — protocol-specific subdirectory
+        self.protocol = protocol
+        self.results_dir = os.path.join(PROJECT_ROOT, 'analysis', 'data', 'model_performance', sweep_name, protocol)
         # Determine CSV file path with auto-detection
         if input_file:
             self.csv_path = os.path.join(self.results_dir, input_file)
@@ -437,8 +439,32 @@ class ComprehensiveAnalyzer:
             'config_id': 'unknown'
         }
         
-        # Extract from filename pattern: model_results_ref{refinement}_budget{budget}_max{level}.csv
-        if 'model_results_ref' in filename:
+        # Extract from filename pattern
+        if 'model_results_burnin' in filename:
+            # Burn-in format: model_results_burnin_budget{budget}_max{level}.csv
+            try:
+                config_part = filename.replace('model_results_burnin_', '').replace('.csv', '')
+                parts = config_part.split('_')
+                budget_part = parts[0].replace('budget', '')
+                element_budget = int(budget_part)
+                max_part = parts[1].replace('max', '')
+                max_level = int(max_part)
+                
+                config_info.update({
+                    'initial_refinement': None,
+                    'element_budget': element_budget,
+                    'max_level': max_level,
+                    'config_id': f"burnin_budget{element_budget}_max{max_level}"
+                })
+                
+                if self.verbose:
+                    print(f"Extracted burn-in configuration: {config_info['config_id']}")
+                    
+            except (ValueError, IndexError) as e:
+                if self.verbose:
+                    print(f"Warning: Could not parse burn-in configuration from filename {filename}: {e}")
+                    
+        elif 'model_results_ref' in filename:
             try:
                 # Remove prefix and suffix
                 config_part = filename.replace('model_results_ref', '').replace('.csv', '')
@@ -447,10 +473,10 @@ class ComprehensiveAnalyzer:
                 if '_max' in config_part:
                     # New format: ref5_budget150_max5
                     parts = config_part.split('_')
-                    initial_refinement = int(parts[0])  # ref5 -> 5
-                    budget_part = parts[1].replace('budget', '')  # budget150 -> 150
+                    initial_refinement = int(parts[0])
+                    budget_part = parts[1].replace('budget', '')
                     element_budget = int(budget_part)
-                    max_part = parts[2].replace('max', '')  # max5 -> 5
+                    max_part = parts[2].replace('max', '')
                     max_level = int(max_part)
                     
                     config_info.update({
@@ -465,7 +491,7 @@ class ComprehensiveAnalyzer:
                     if len(parts) == 2:
                         initial_refinement = int(parts[0])
                         element_budget = int(parts[1])
-                        max_level = initial_refinement  # Default assumption
+                        max_level = initial_refinement
                         
                         config_info.update({
                             'initial_refinement': initial_refinement,
@@ -517,10 +543,17 @@ class ComprehensiveAnalyzer:
         Returns:
             str: Formatted subtitle like "Simulation Configuration: initial
                 refinement level: 4, element budget: 80, max refinement level: 4"
+                or "Simulation Configuration: burn-in initialization, element
+                budget: 100, max refinement level: 6"
         """
         config_info = self.extract_configuration_info()
         
-        return (f"Simulation Configuration: initial refinement level: {config_info['initial_refinement']}, "
+        if config_info['initial_refinement'] is None:
+            init_str = "burn-in initialization"
+        else:
+            init_str = f"initial refinement level: {config_info['initial_refinement']}"
+        
+        return (f"Simulation Configuration: {init_str}, "
             f"element budget: {config_info['element_budget']}, max refinement level: {config_info['max_level']}")
     
     def _calculate_ideal_point(self):
@@ -1369,6 +1402,8 @@ def main():
     # Output options
     parser.add_argument('--output-format', choices=['pdf', 'png', 'svg'], default='pdf', help='Output format for plots')
     parser.add_argument('--output-dir', type=str, help='Custom output directory (overrides default)')
+    parser.add_argument('--protocol', choices=['fixed_ref', 'burnin'], default='fixed_ref',
+                        help='Evaluation protocol subdirectory (default: fixed_ref)')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
     
     args = parser.parse_args()
@@ -1382,7 +1417,8 @@ def main():
             include_baselines=args.include_baselines,
             baseline_methods=args.baseline_methods,
             baseline_config=args.baseline_config,
-            custom_output_dir=args.output_dir
+            custom_output_dir=args.output_dir,
+            protocol=args.protocol
         )
         
         # Create comprehensive plots

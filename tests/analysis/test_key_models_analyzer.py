@@ -53,7 +53,7 @@ def mock_aggregate_dir():
     
     aggregate_dir = os.path.join(
         temp_dir, 'analysis', 'data', 'model_performance', 
-        sweep_name, 'aggregate_results'
+        sweep_name, 'fixed_ref', 'aggregate_results'
     )
     os.makedirs(aggregate_dir, exist_ok=True)
     
@@ -309,8 +309,8 @@ class TestErrorHandling:
         
         # Remove one of the required files
         aggregate_dir = os.path.join(
-            temp_dir, 'analysis', 'data', 'model_performance',
-            sweep_name, 'aggregate_results'
+            temp_dir, 'analysis', 'data', 'model_performance', 
+            sweep_name, 'fixed_ref', 'aggregate_results'
         )
         os.remove(os.path.join(aggregate_dir, 'lowest_cost_models.csv'))
         
