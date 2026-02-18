@@ -906,16 +906,28 @@ def run_single_model(model_path, time_final=1.0, element_budget=50, max_level=5,
     total_cost = sum(element_counts)
 
 
+    # # Calculate cost ratio against uniform max-level baseline.
+    # # Baseline: "what if we ran a uniform mesh at max_level with no AMR?"
+    # # Protocol-independent — same baseline for burn-in and fixed-ref.
+    # import math
+    # base_elements = 4  # From xelem = [-1, -0.4, 0, 0.4, 1]
+    # baseline_elements = base_elements * (2 ** max_level)
+    # dx_min_baseline = min(np.diff(xelem)) / (2 ** max_level)
+    # dt_baseline = courant_max * dx_min_baseline / solver.wave_speed
+    # baseline_timesteps = math.ceil(time_final / dt_baseline)
+    # no_amr_baseline_cost = baseline_elements * baseline_timesteps
+    # number_of_timesteps = step_count
+    # cost_ratio = total_cost / no_amr_baseline_cost
+
     # Calculate cost ratio against uniform max-level baseline.
     # Baseline: "what if we ran a uniform mesh at max_level with no AMR?"
     # Protocol-independent — same baseline for burn-in and fixed-ref.
-    import math
+    # Uses actual step_count because the solver's dt (with stability margin)
+    # would be identical for a uniform max-level mesh — both are driven by
+    # the same finest element size through _compute_timestep().
     base_elements = 4  # From xelem = [-1, -0.4, 0, 0.4, 1]
     baseline_elements = base_elements * (2 ** max_level)
-    dx_min_baseline = min(np.diff(xelem)) / (2 ** max_level)
-    dt_baseline = courant_max * dx_min_baseline / solver.wave_speed
-    baseline_timesteps = math.ceil(time_final / dt_baseline)
-    no_amr_baseline_cost = baseline_elements * baseline_timesteps
+    no_amr_baseline_cost = baseline_elements * step_count
     number_of_timesteps = step_count
     cost_ratio = total_cost / no_amr_baseline_cost
 

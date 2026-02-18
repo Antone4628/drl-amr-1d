@@ -2,8 +2,8 @@
 
 **Project:** Systematic investigation of evaluation, observation space, and training improvements for 1D DRL-AMR  
 **Created:** February 12, 2025  
-**Last Updated:** February 17, 2025
-**Status:** Thread 1 — Experiment 1.1 Complete, Experiment 1.2 In Progress
+**Last Updated:** February 18, 2025
+**Status:** Thread 1 — Experiment 1.1 Complete, Experiment 1.2 In Progress (eval protocol subdirectory restructure complete, batch eval ready)
 
 ---
 
@@ -225,6 +225,7 @@ Placeholder for investigations that emerge during Threads 1–3. When adding exp
 | 2025-02-17 | Cost_ratio baseline: max-level uniform mesh (Option A) | `baseline = 4 × 2^max_level` elements with self-consistent dt. Protocol-independent — same baseline for burn-in and fixed-ref. Old baseline used `actual_initial_elements` which was circular for burn-in (baseline depends on model's own burn-in result). |
 | 2025-02-17 | Move roadmap and experiment logs to `research_logs/` directory | Avoids cluttering repo root as experiment logs accumulate across Threads 1–3. Both roadmap and logs live together since they're tightly coupled. |
 | 2025-02-17 | First batch eval config: budget=100, max_level=6, icase=1 | Matches existing fixed-ref plot (ref6/budget100/max6) for direct comparison. Primary hypothesis: horizontal band of poorly-performing models disappears with burn-in. |
+| 2025-02-18 | Protocol-specific subdirectories for evaluation results | Output structure: `model_performance/{sweep}/fixed_ref/` and `model_performance/{sweep}/burnin/`. Prevents overwrites, enables side-by-side comparison. All analyzers accept `--protocol` flag (default: fixed_ref). Burn-in filenames use `burnin` prefix instead of `ref_0`. Backward compatible. |
 
 ---
 
@@ -235,7 +236,7 @@ Quick-reference status of all experiments. Updated each session.
 | ID | Name | Status | Key Finding | Log File |
 |----|------|--------|-------------|----------|
 | 1.1 | Burn-in diagnostics | Complete | 8/10 converge (rounds 5–9); 2/10 oscillate (constraint artifact); zero net change × 3 is viable stopping criterion. See F1–F5. | `research_logs/EXP_LOG_1_1_burnin_diagnostics.md` |
-| 1.2 | Stopping criterion | In Progress | Burn-in init implemented in `run_single_model()` and `evaluate_single_model_by_index.py`. Local tests pass. Cost_ratio baseline updated to max-level uniform mesh. Batch eval pending. | `research_logs/EXP_LOG_1_2_stopping_criterion.md` |
+| 1.2 | Stopping criterion | In Progress | Burn-in init implemented in `run_single_model()` and `evaluate_single_model_by_index.py`. Local tests pass. Cost_ratio baseline updated to max-level uniform mesh. Eval protocol subdirectory restructure complete (fixed_ref/burnin). Batch eval ready to submit. | `research_logs/EXP_LOG_1_2_stopping_criterion.md` |
 | 1.3 | Burn-in vs full-ref | Not started | — | — |
 | 1.4 | Adaptation regime | Not started | — | — |
 | 2.1 | Remove solution_values | Not started | — | — |
@@ -254,6 +255,7 @@ Quick-reference status of all experiments. Updated each session.
 | R.2 | 2025-02-13 | Burn-in implementation + exploratory runs | Implemented all Phase A–H changes: dict return type, burn-in diagnostics function, CLI flags, verbose fix. Pushed branch. Created `visualize_burnin.py` animation script. Ran exploratory experiments varying max_level and budget that produced key findings F1–F3. | NumPy 2.x incompatibility with PyTorch 2.2 required `numpy<2` downgrade on Mac. |
 | R.3 | 2025-02-16 | Full 10-model diagnostic + unconstrained oscillator tests | Committed `visualize_burnin.py`. Ran full 10-model batch diagnostic on Borah (SLURM array). 8/10 converge, 2/10 oscillate. Ran unconstrained tests on oscillators — both converge when unconstrained, confirming constraint artifact (F4). Discovered persistent mesh churn in r6 (F5). Experiment 1.1 complete. | 3-day gap since R.2. SLURM scripts created directly on Borah (gitignored). r6 unconstrained run took ~25 min due to high element count (333) with persistent churn. |
 | R.4 | 2025-02-17 | Burn-in init implementation (Exp 1.2) | Implemented burn-in init path in `run_single_model()` with `--burnin-init`, `--burnin-rounds`, `--burnin-convergence-patience` CLI args. Updated all visualization functions with `burnin_metadata` passthrough. Updated `evaluate_single_model_by_index.py` with optional burnin arg and CSV columns. Decoupled verbose from solver/adapter. Fixed duplicate Training Parameters prefix. Updated cost_ratio to max-level uniform baseline. Created `research_logs/` directory, moved roadmap and logs there. Local tests pass for both burn-in and fixed-ref paths. | First session with filesystem MCP read/write. Cost_ratio baseline change discussed — Option A (max-level uniform) chosen for protocol independence. Advisor consulted via Slack. |
+| R.5 | 2025-02-18 | Eval protocol subdirectory restructure (Exp 1.2) | Restructured evaluation output into protocol-specific subdirectories (`fixed_ref/`, `burnin/`) to prevent overwrites and enable side-by-side comparison. Modified 7 scripts: evaluate_single_model_by_index.py (writer), create_batch_evaluation_jobs.py (job gen), batch_model_evaluation_template.slurm (template), comprehensive_analyzer.py (Stage 1), pareto_key_models_analyzer.py (Stage 2), key_models_analyzer.py (Stage 3). Updated all 3 test files. All 298 tests pass. | No existing eval data on Mac or Borah — no migration needed. Phase 7 (data migration) was a no-op. |
 
 ---
 
