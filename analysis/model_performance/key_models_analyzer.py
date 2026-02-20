@@ -2015,8 +2015,6 @@ def main():
                     help='Output format for plots')
     parser.add_argument('--verbose', action='store_true', default=True,
                     help='Enable verbose output')
-    parser.add_argument('--protocol', choices=['fixed_ref', 'burnin'], default='fixed_ref',
-                        help='Evaluation protocol subdirectory (default: fixed_ref)')
     parser.add_argument('--selected-models', 
                 help='Comma-separated list of model labels for manual flagship plot (e.g., "b3,g7,r2")')
     parser.add_argument('--stage3-no-ideal', action='store_true',
