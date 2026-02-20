@@ -150,7 +150,7 @@ class KeyModelsAnalyzer:
     >>> print(f"Global flagship: {flagships['global_flagship']['config_id']}")
     """
     
-    def __init__(self, sweep_name, output_subdir="uniform_initial_max", output_format='png', verbose=True, protocol='fixed_ref'):
+    def __init__(self, sweep_name, protocol='burnin', output_subdir=None, output_format='png', verbose=True):
         """
         Initialize the key models analyzer.
         
@@ -168,7 +168,8 @@ class KeyModelsAnalyzer:
             FileNotFoundError: If required aggregate CSV files are not found.
         """
         self.sweep_name = sweep_name
-        self.output_subdir = output_subdir
+        self.protocol = protocol
+        self.output_subdir = output_subdir if output_subdir else protocol
         self.output_format = output_format
         self.verbose = verbose
         # Initialize CLI argument attributes (will be set by main() if provided)
@@ -179,6 +180,7 @@ class KeyModelsAnalyzer:
         
         # Set up paths — protocol-specific subdirectory
         self.protocol = protocol
+        # Set up paths — protocol subdirectory (fixed_ref/ or burnin/)
         self.data_dir = os.path.join(PROJECT_ROOT, 'analysis', 'data', 'model_performance', sweep_name, protocol)
         self.aggregate_dir = os.path.join(self.data_dir, 'aggregate_results')
         self.output_dir = os.path.join(self.aggregate_dir, 'aggregate_analysis', output_subdir)
@@ -232,16 +234,18 @@ class KeyModelsAnalyzer:
                 raise FileNotFoundError(f"Required file not found: {filepath}")
             
 
-        # Load traditional AMR baseline data for comparison (at session root level)
-        baseline_file = os.path.join(self.data_dir, 'baseline_results_conventional-amr_ref5_budget100_max5.csv')
-        if os.path.exists(baseline_file):
-            self.traditional_amr_df = pd.read_csv(baseline_file)
+        # Load all traditional AMR baseline data from protocol directory
+        import glob
+        baseline_pattern = os.path.join(self.data_dir, 'baseline_results_conventional-amr_*.csv')
+        baseline_files = sorted(glob.glob(baseline_pattern))
+        if baseline_files:
+            self.traditional_amr_df = pd.concat([pd.read_csv(f) for f in baseline_files], ignore_index=True)
             if self.verbose:
-                print(f"   Loaded traditional AMR baselines: {len(self.traditional_amr_df)} threshold points")
+                print(f"   Loaded traditional AMR baselines: {len(self.traditional_amr_df)} threshold points from {len(baseline_files)} files")
         else:
             self.traditional_amr_df = None
             if self.verbose:
-                print(f"   Warning: Traditional AMR data not found at {baseline_file}")
+                print(f"   Warning: No traditional AMR baseline files found in {self.data_dir}")
 
     def _load_baseline_data(self, baseline_mode='full'):
         """
@@ -264,26 +268,24 @@ class KeyModelsAnalyzer:
         
         # Use the same approach as the flagship comparison
         # Look for baseline files in the session root directory (self.data_dir)
-        baseline_files = {
-            'conventional_amr': f'baseline_results_conventional-amr_ref5_budget100_max5.csv'
-        }
+        # Load all conventional-AMR baseline files from protocol directory
+        import glob
+        baseline_pattern = os.path.join(self.data_dir, 'baseline_results_conventional-amr_*.csv')
+        baseline_files_found = sorted(glob.glob(baseline_pattern))
         
-        for method, filename in baseline_files.items():
-            filepath = os.path.join(self.data_dir, filename)
-            
-            if os.path.exists(filepath):
-                try:
-                    df = pd.read_csv(filepath)
-                    if not df.empty:
-                        baseline_data[method] = df
-                        if self.verbose:
-                            print(f"   Loaded {method} baseline: {len(df)} entries")
-                except Exception as e:
+        if baseline_files_found:
+            try:
+                df = pd.concat([pd.read_csv(f) for f in baseline_files_found], ignore_index=True)
+                if not df.empty:
+                    baseline_data['conventional_amr'] = df
                     if self.verbose:
-                        print(f"   Warning: Could not load {filename}: {e}")
-            else:
+                        print(f"   Loaded conventional_amr baseline: {len(df)} entries from {len(baseline_files_found)} files")
+            except Exception as e:
                 if self.verbose:
-                    print(f"   Baseline file not found: {filename}")
+                    print(f"   Warning: Could not load baseline files: {e}")
+        else:
+            if self.verbose:
+                print(f"   No baseline files found in {self.data_dir}")
         
         # Apply baseline mode filtering
         if baseline_mode == 'minimal' and 'conventional_amr' in baseline_data:
@@ -2005,8 +2007,10 @@ def main():
                 default=['all'],
                 choices=['all',  'distributions', 'tradeoffs', 'efficiency', 'flagship', 'flagship_combined', 'flagship_comparison', 'flagship_dashboard','stage3_overview', 'global_pareto','table', 'manual_flagship'],
                 help='Visualizations to create (default: all)')
-    parser.add_argument('--output-subdir', default='uniform_initial_max',
-                    help='Output subdirectory name')
+    parser.add_argument('--protocol', default='burnin',
+                    help='Evaluation protocol subdirectory (default: burnin)')
+    parser.add_argument('--output-subdir', default=None,
+                    help='Output subdirectory name (default: same as --protocol)')
     parser.add_argument('--output-format', choices=['png', 'pdf'], default='png',
                     help='Output format for plots')
     parser.add_argument('--verbose', action='store_true', default=True,
@@ -2027,10 +2031,10 @@ def main():
     # Initialize and run analyzer
     analyzer = KeyModelsAnalyzer(
         sweep_name=args.sweep_name,
+        protocol=args.protocol,
         output_subdir=args.output_subdir,
         output_format=args.output_format,
-        verbose=args.verbose,
-        protocol=args.protocol
+        verbose=args.verbose
     )
     
     if args.selected_models:
