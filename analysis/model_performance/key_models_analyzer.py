@@ -183,6 +183,7 @@ class KeyModelsAnalyzer:
         # Set up paths — protocol subdirectory (fixed_ref/ or burnin/)
         self.data_dir = os.path.join(PROJECT_ROOT, 'analysis', 'data', 'model_performance', sweep_name, protocol)
         self.aggregate_dir = os.path.join(self.data_dir, 'aggregate_results')
+        output_subdir = output_subdir if output_subdir else protocol
         self.output_dir = os.path.join(self.aggregate_dir, 'aggregate_analysis', output_subdir)
         
         # Create output directory
