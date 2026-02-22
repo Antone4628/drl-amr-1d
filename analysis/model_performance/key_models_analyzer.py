@@ -452,36 +452,6 @@ class KeyModelsAnalyzer:
         if self.verbose:
             print("🔍 Creating parameter table visualization...")
         
-        # # Get all unique configurations and sort them
-        # all_configs = set()
-        # for dataset in self.datasets.values():
-        #     for _, row in dataset.iterrows():
-        #         config_tuple = (row['initial_refinement'], row['evaluation_element_budget'], row['max_level'])
-        #         all_configs.add(config_tuple)
-        
-        # sorted_configs = sorted(list(all_configs))
-        
-        # if self.verbose:
-        #     print(f"   Found {len(sorted_configs)} configurations")
-        #     print(f"   Categories: {list(self.datasets.keys())}")
-        
-        # # Create table data with configuration as first column
-        # table_data = []
-        
-        # for config in sorted_configs:
-        #     initial_ref, eval_budget, max_level = config
-            
-        #     # Format configuration string
-        #     config_string = f"{initial_ref},{eval_budget},{max_level}"
-            
-        #     # Get parameter strings for each category
-        #     lowest_cost_params = self._get_parameter_string_for_config('lowest_cost', config)
-        #     lowest_error_params = self._get_parameter_string_for_config('lowest_l2', config)
-        #     optimal_neutral_params = self._get_parameter_string_for_config('optimal_neutral', config)
-            
-        #     # Create row with all four data columns
-        #     row_data = [config_string, lowest_cost_params, lowest_error_params, optimal_neutral_params]
-        #     table_data.append(row_data)
 
         # Get all unique config_ids and sort them
         all_config_ids = set()
@@ -689,46 +659,6 @@ class KeyModelsAnalyzer:
         
         plt.close()
 
-    # def _get_parameter_string_for_config(self, category_key, config_tuple):
-    #     """
-    #     Get formatted parameter string for a specific configuration and category.
-        
-    #     Looks up the model matching the given configuration in the specified
-    #     category and returns a formatted string of its training parameters.
-        
-    #     Args:
-    #         category_key: Key identifying the model category ('lowest_cost',
-    #             'lowest_l2', or 'optimal_neutral').
-    #         config_tuple: Tuple of (initial_refinement, eval_budget, max_level).
-        
-    #     Returns:
-    #         str: Formatted parameter string like "y=50.0, s=0.05, r=25, b=30"
-    #             or "N/A" if no matching model found.
-    #     """
-    #     initial_ref, eval_budget, max_level = config_tuple
-        
-    #     # Find the model for this configuration in the specified category
-    #     dataset = self.datasets[category_key]
-        
-    #     matching_rows = dataset[
-    #         (dataset['initial_refinement'] == initial_ref) & 
-    #         (dataset['evaluation_element_budget'] == eval_budget) &
-    #         (dataset['max_level'] == max_level)
-    #     ]
-        
-    #     if len(matching_rows) == 0:
-    #         return "N/A"
-    #     elif len(matching_rows) > 1:
-    #         if self.verbose:
-    #             print(f"⚠️ Warning: Multiple matches found for {config_tuple} in {category_key}")
-    #         row = matching_rows.iloc[0]  # Take first match
-    #     else:
-    #         row = matching_rows.iloc[0]
-        
-    #     # Format as "y=γc, s=step_domain, r=rl_iter, b=element_budget"
-    #     param_string = f"y={row['gamma_c']:.1f}, s={row['step_domain_fraction']:.2f}, r={int(row['rl_iterations_per_timestep'])}, b={int(row['element_budget'])}"
-        
-    #     return param_string
 
     def _get_parameter_string_for_config(self, category_key, config_id):
         """Get formatted parameter string for a specific configuration and category."""
@@ -2057,7 +1987,8 @@ class KeyModelsAnalyzer:
 
         if 'manual_flagship' in visualizations:
             if hasattr(self, 'selected_models') and self.selected_models:
-                self.create_manual_flagship_plot(self.selected_models)
+                include_bl = getattr(self, 'stage3_baselines', False)
+                self.create_manual_flagship_plot(self.selected_models, include_baselines=include_bl)
             else:
                 print("Warning: manual_flagship requires --selected-models argument")
         
