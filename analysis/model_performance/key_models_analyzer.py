@@ -276,26 +276,27 @@ class KeyModelsAnalyzer:
         
         baseline_data = {}
         
-        # Use the same approach as the flagship comparison
-        # Look for baseline files in the session root directory (self.data_dir)
-        # Load all conventional-AMR baseline files from protocol directory
-        import glob
-        baseline_pattern = os.path.join(self.data_dir, 'baseline_results_conventional-amr_*.csv')
-        baseline_files_found = sorted(glob.glob(baseline_pattern))
+        # Load single representative baseline file
+        baseline_files = {
+            'conventional_amr': 'baseline_results_conventional-amr_ref5_budget100_max5.csv'
+        }
         
-        if baseline_files_found:
-            try:
-                df = pd.concat([pd.read_csv(f) for f in baseline_files_found], ignore_index=True)
-                if not df.empty:
-                    baseline_data['conventional_amr'] = df
+        for method, filename in baseline_files.items():
+            filepath = os.path.join(self.data_dir, filename)
+            
+            if os.path.exists(filepath):
+                try:
+                    df = pd.read_csv(filepath)
+                    if not df.empty:
+                        baseline_data[method] = df
+                        if self.verbose:
+                            print(f"   Loaded {method} baseline: {len(df)} entries")
+                except Exception as e:
                     if self.verbose:
-                        print(f"   Loaded conventional_amr baseline: {len(df)} entries from {len(baseline_files_found)} files")
-            except Exception as e:
+                        print(f"   Warning: Could not load {filename}: {e}")
+            else:
                 if self.verbose:
-                    print(f"   Warning: Could not load baseline files: {e}")
-        else:
-            if self.verbose:
-                print(f"   No baseline files found in {self.data_dir}")
+                    print(f"   Baseline file not found: {filename}")
         
         # Apply baseline mode filtering
         if baseline_mode == 'minimal' and 'conventional_amr' in baseline_data:
