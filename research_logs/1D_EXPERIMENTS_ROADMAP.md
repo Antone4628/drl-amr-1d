@@ -2,8 +2,8 @@
 
 **Project:** Systematic investigation of evaluation, observation space, and training improvements for 1D DRL-AMR  
 **Created:** February 12, 2025  
-**Last Updated:** February 18, 2025
-**Status:** Thread 1 — Experiment 1.1 Complete, Experiment 1.2 In Progress (eval protocol subdirectory restructure complete, batch eval ready)
+**Last Updated:** February 20, 2025
+**Status:** Thread 1 — Experiment 1.2 In Progress (all 9 burn-in batch evals complete, Stages 1–3 analysis run, baseline integration in progress)
 
 ---
 
@@ -91,7 +91,7 @@ Threads 2 and 3 branching strategy will be decided when we get there, informed b
 - Persistent mesh churn at net-zero equilibrium observed in r6 model (F5)
 
 ### Experiment 1.2: Stopping Criterion Design
-**Status:** In Progress — burn-in init path implemented and tested locally, batch evaluation pending  
+**Status:** In Progress — all 9 burn-in batch evaluations complete on Borah, Stages 1–3 analysis run, hypothesis confirmed (F6), baseline integration and Stage 3 plotting fixes in progress  
 **Experiment Log:** `research_logs/EXP_LOG_1_2_stopping_criterion.md`
 
 **Objective:** Define a concrete, automatable stopping rule for burn-in based on Experiment 1.1 findings.
@@ -226,6 +226,9 @@ Placeholder for investigations that emerge during Threads 1–3. When adding exp
 | 2025-02-17 | Move roadmap and experiment logs to `research_logs/` directory | Avoids cluttering repo root as experiment logs accumulate across Threads 1–3. Both roadmap and logs live together since they're tightly coupled. |
 | 2025-02-17 | First batch eval config: budget=100, max_level=6, icase=1 | Matches existing fixed-ref plot (ref6/budget100/max6) for direct comparison. Primary hypothesis: horizontal band of poorly-performing models disappears with burn-in. |
 | 2025-02-18 | Protocol-specific subdirectories for evaluation results | Output structure: `model_performance/{sweep}/fixed_ref/` and `model_performance/{sweep}/burnin/`. Prevents overwrites, enables side-by-side comparison. All analyzers accept `--protocol` flag (default: fixed_ref). Burn-in filenames use `burnin` prefix instead of `ref_0`. Backward compatible. |
+| 2025-02-20 | Cost_ratio baseline: use solver's actual step_count, not independent dt calculation | The R.4 independent dt formula (`courant_max * dx_min / wave_speed`) didn't match solver's `_compute_timestep()` which includes a `/2` stability margin. This caused baseline timesteps to be half the actual count, inflating cost_ratio above 1.0 for low max_levels. Fix: `no_amr_baseline_cost = baseline_elements * step_count`. Both AMR and uniform mesh use the same dt (driven by same finest level), so step_count is correct for both. |
+| 2025-02-20 | SLURM script naming: include max_level | `create_batch_evaluation_jobs.py` burn-in filename was `batch_model_evaluation_burnin_budget_{B}.slurm` — multiple max_levels overwrote each other. Fixed to `batch_model_evaluation_burnin_budget_{B}_max_{M}.slurm`. |
+| 2025-02-20 | `key_models_analyzer.py`: protocol-aware paths and defaults | Constructor accepts `protocol` arg. `data_dir` includes protocol subdirectory. `--output-subdir` defaults to protocol value instead of hardcoded `uniform_initial_max`. Default protocol set to `burnin`. Baseline loading updated to concat all matching files in protocol directory. |
 
 ---
 
@@ -236,7 +239,7 @@ Quick-reference status of all experiments. Updated each session.
 | ID | Name | Status | Key Finding | Log File |
 |----|------|--------|-------------|----------|
 | 1.1 | Burn-in diagnostics | Complete | 8/10 converge (rounds 5–9); 2/10 oscillate (constraint artifact); zero net change × 3 is viable stopping criterion. See F1–F5. | `research_logs/EXP_LOG_1_1_burnin_diagnostics.md` |
-| 1.2 | Stopping criterion | In Progress | Burn-in init implemented in `run_single_model()` and `evaluate_single_model_by_index.py`. Local tests pass. Cost_ratio baseline updated to max-level uniform mesh. Eval protocol subdirectory restructure complete (fixed_ref/burnin). Batch eval ready to submit. | `research_logs/EXP_LOG_1_2_stopping_criterion.md` |
+| 1.2 | Stopping criterion | In Progress | Burn-in init implemented in `run_single_model()` and `evaluate_single_model_by_index.py`. Local tests pass. Cost_ratio baseline updated to max-level uniform mesh. Eval protocol subdirectory restructure complete (fixed_ref/burnin). All 9 burn-in batch evals complete. **Horizontal band hypothesis confirmed (F6).** Stages 1–3 analysis run. Baseline integration and Stage 3 plotting fixes in progress. | `research_logs/EXP_LOG_1_2_stopping_criterion.md` |
 | 1.3 | Burn-in vs full-ref | Not started | — | — |
 | 1.4 | Adaptation regime | Not started | — | — |
 | 2.1 | Remove solution_values | Not started | — | — |
@@ -256,6 +259,7 @@ Quick-reference status of all experiments. Updated each session.
 | R.3 | 2025-02-16 | Full 10-model diagnostic + unconstrained oscillator tests | Committed `visualize_burnin.py`. Ran full 10-model batch diagnostic on Borah (SLURM array). 8/10 converge, 2/10 oscillate. Ran unconstrained tests on oscillators — both converge when unconstrained, confirming constraint artifact (F4). Discovered persistent mesh churn in r6 (F5). Experiment 1.1 complete. | 3-day gap since R.2. SLURM scripts created directly on Borah (gitignored). r6 unconstrained run took ~25 min due to high element count (333) with persistent churn. |
 | R.4 | 2025-02-17 | Burn-in init implementation (Exp 1.2) | Implemented burn-in init path in `run_single_model()` with `--burnin-init`, `--burnin-rounds`, `--burnin-convergence-patience` CLI args. Updated all visualization functions with `burnin_metadata` passthrough. Updated `evaluate_single_model_by_index.py` with optional burnin arg and CSV columns. Decoupled verbose from solver/adapter. Fixed duplicate Training Parameters prefix. Updated cost_ratio to max-level uniform baseline. Created `research_logs/` directory, moved roadmap and logs there. Local tests pass for both burn-in and fixed-ref paths. | First session with filesystem MCP read/write. Cost_ratio baseline change discussed — Option A (max-level uniform) chosen for protocol independence. Advisor consulted via Slack. |
 | R.5 | 2025-02-18 | Eval protocol subdirectory restructure (Exp 1.2) | Restructured evaluation output into protocol-specific subdirectories (`fixed_ref/`, `burnin/`) to prevent overwrites and enable side-by-side comparison. Modified 7 scripts: evaluate_single_model_by_index.py (writer), create_batch_evaluation_jobs.py (job gen), batch_model_evaluation_template.slurm (template), comprehensive_analyzer.py (Stage 1), pareto_key_models_analyzer.py (Stage 2), key_models_analyzer.py (Stage 3). Updated all 3 test files. All 298 tests pass. | No existing eval data on Mac or Borah — no migration needed. Phase 7 (data migration) was a no-op. |
+| R.6 | 2025-02-20 | Burn-in batch evaluation + analysis (Exp 1.2) | Ran all 9 burn-in batch evaluations (3 budgets × 3 max_levels) on Borah. Fixed cost_ratio baseline bug (independent dt formula didn't match solver's stability margin — reverted to using solver.dt via step_count). Fixed SLURM script naming collision (added max_level to filename). Ran Stages 1–3 analysis. **Hypothesis confirmed: horizontal band of poorly-performing models disappears with burn-in (F6).** Added `--protocol` and `--output-subdir` to `key_models_analyzer.py`. Updated baseline loading to concat all matching files. Added `seaborn` import. Copied conventional-AMR baseline files from archive repo. | Cost_ratio fix: original formula used `actual_initial_elements` (wrong for burn-in) — R.4 replaced with independent dt calc that also had a bug (missing /2 stability margin). Final fix: `baseline_elements * step_count` where `baseline_elements = 4 * 2^max_level`. Stage 3 baseline plotting has two open bugs: legend explosion (70+ entries) and `baseline_mode='none'` override. |
 
 ---
 
@@ -382,6 +386,19 @@ By contrast, b1 converged to 384 elements with literally zero actions from round
 **Interpretation:** The r6 model has a decision boundary that places some elements right at the refine/coarsen threshold. After reinitializing the exact solution on the adapted mesh, the non-conformity values for these marginal elements shift slightly, causing them to alternate between being just above and just below the threshold. This is model-specific — not all models exhibit this behavior.
 
 **Implication:** For burn-in purposes, this is likely benign — the mesh size and overall quality are stable, just with some element-level jitter. However, it could affect per-timestep adaptation during the main loop (Experiment 1.4), where persistent churn would add unnecessary computational cost without improving mesh quality. Worth monitoring when r6 is evaluated with full timestepping.
+
+---
+
+### F6: Horizontal band of poor performance was caused by destructive coarsening in fixed-ref initialization
+
+**Source:** Experiment 1.2 burn-in batch evaluation (Session R.6) — 81-model sweep, 9 configs  
+**Informs:** Experiments 1.3, 1.4
+
+**Finding:** Under fixed-refinement evaluation (ref=max_level), roughly half the 81 models clustered in a horizontal band at ~0.1 L2 error spanning the full cost_ratio range. Under burn-in evaluation with the same budget and max_level constraints, this band completely disappears. All 81 models now fall along a smooth Pareto-like accuracy-vs-cost tradeoff curve. Best models achieve an order of magnitude better accuracy (~5×10⁻⁵) than visible under fixed-ref.
+
+**Interpretation:** When models start on a fully-refined mesh (e.g., ref6 = 256 elements) with budget=100, they must immediately shed 156 elements. Any missteps during this coarsening phase — removing resolution near the wave peak, for instance — permanently corrupt the solution via projection onto a coarser basis. Subsequent refinement cannot recover the lost information. Burn-in sidesteps this entirely: models build meshes from the 4-element base grid, placing resolution where they see fit. No destructive coarsening phase occurs.
+
+**Implication:** The fixed-ref evaluation protocol was systematically masking model quality. Models that appeared to be poor performers were actually good AMR strategies that happened to handle the artificial coarsen-down phase badly — a scenario they were never trained for. This strongly validates burn-in as the correct evaluation protocol and confirms the motivation for Thread 1. Experiment 1.3 (burn-in vs fixed-ref comparison) can now be scoped as a documentation exercise rather than an open research question.
 
 ---
 

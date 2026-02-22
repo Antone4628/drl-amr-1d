@@ -236,17 +236,26 @@ class KeyModelsAnalyzer:
             
 
         # Load all traditional AMR baseline data from protocol directory
-        import glob
-        baseline_pattern = os.path.join(self.data_dir, 'baseline_results_conventional-amr_*.csv')
-        baseline_files = sorted(glob.glob(baseline_pattern))
-        if baseline_files:
-            self.traditional_amr_df = pd.concat([pd.read_csv(f) for f in baseline_files], ignore_index=True)
-            if self.verbose:
-                print(f"   Loaded traditional AMR baselines: {len(self.traditional_amr_df)} threshold points from {len(baseline_files)} files")
-        else:
-            self.traditional_amr_df = None
-            if self.verbose:
-                print(f"   Warning: No traditional AMR baseline files found in {self.data_dir}")
+        baseline_files = {
+            'conventional_amr': 'baseline_results_conventional-amr_ref5_budget100_max5.csv'
+        }
+        
+        for method, filename in baseline_files.items():
+            filepath = os.path.join(self.data_dir, filename)
+            
+            if os.path.exists(filepath):
+                try:
+                    df = pd.read_csv(filepath)
+                    if not df.empty:
+                        baseline_data[method] = df
+                        if self.verbose:
+                            print(f"   Loaded {method} baseline: {len(df)} entries")
+                except Exception as e:
+                    if self.verbose:
+                        print(f"   Warning: Could not load {filename}: {e}")
+            else:
+                if self.verbose:
+                    print(f"   Baseline file not found: {filename}")
 
     def _load_baseline_data(self, baseline_mode='full'):
         """
@@ -351,27 +360,38 @@ class KeyModelsAnalyzer:
 
     def _add_data_labels(self, ax, all_models_df):
         """
-        Add text labels to data points on the plot.
-        
-        Labels each point with its model label (e.g., 'b1', 'g5', 'r3') for
-        identification in the visualization.
+        Add labels to all data points for identification.
         
         Args:
-            ax: Matplotlib Axes object to draw on.
-            all_models_df: DataFrame containing all models with 'model_label',
-                'cost_ratio', and 'grid_normalized_l2_error' columns.
+            ax: Matplotlib axes object
+            all_models_df: DataFrame with all 27 models and 'category' column
         """
-        for _, row in all_models_df.iterrows():
-            # Get label - use model_label if available, otherwise create from index
-            label = row.get('model_label', f"{row.name}")
+        # Label scheme: b1-b9, g1-g9, r1-r9 (original CSV order)
+        category_prefixes = {
+            'lowest_cost': 'b',
+            'optimal_neutral': 'g', 
+            'lowest_l2': 'r'
+        }
+        
+        for category, prefix in category_prefixes.items():
+            subset = all_models_df[all_models_df['category'] == category]
             
-            # Position label slightly offset from point
-            ax.annotate(label,
-                       xy=(row['cost_ratio'], row['grid_normalized_l2_error']),
-                       xytext=(3, 3),
-                       textcoords='offset points',
-                       fontsize=7,
-                       alpha=0.8)
+            # Label in original CSV order (1-indexed)
+            for i, (_, row) in enumerate(subset.iterrows()):
+                label = f"{prefix}{i+1}"
+                
+                # Simple offset positioning for readability
+                offset_x = 0.01  # Small horizontal offset
+                offset_y = 1.15  # Small vertical offset (multiplicative for log scale)
+                
+                ax.text(row['cost_ratio'] + offset_x, 
+                    row['final_l2_error'] * offset_y,
+                    label, fontsize=8, ha='left', va='bottom',
+                    bbox=dict(boxstyle="round,pad=0.2", facecolor='white', 
+                                alpha=0.8, edgecolor='gray', linewidth=0.5))
+        
+        if self.verbose:
+            print(f"   Added labels: b1-b9, g1-g9, r1-r9 for model identification")
 
     def parse_config_info(self, df):
         """
@@ -432,35 +452,57 @@ class KeyModelsAnalyzer:
         if self.verbose:
             print("🔍 Creating parameter table visualization...")
         
-        # Get all unique configurations and sort them
-        all_configs = set()
-        for dataset in self.datasets.values():
-            for _, row in dataset.iterrows():
-                config_tuple = (row['initial_refinement'], row['evaluation_element_budget'], row['max_level'])
-                all_configs.add(config_tuple)
+        # # Get all unique configurations and sort them
+        # all_configs = set()
+        # for dataset in self.datasets.values():
+        #     for _, row in dataset.iterrows():
+        #         config_tuple = (row['initial_refinement'], row['evaluation_element_budget'], row['max_level'])
+        #         all_configs.add(config_tuple)
         
-        sorted_configs = sorted(list(all_configs))
+        # sorted_configs = sorted(list(all_configs))
+        
+        # if self.verbose:
+        #     print(f"   Found {len(sorted_configs)} configurations")
+        #     print(f"   Categories: {list(self.datasets.keys())}")
+        
+        # # Create table data with configuration as first column
+        # table_data = []
+        
+        # for config in sorted_configs:
+        #     initial_ref, eval_budget, max_level = config
+            
+        #     # Format configuration string
+        #     config_string = f"{initial_ref},{eval_budget},{max_level}"
+            
+        #     # Get parameter strings for each category
+        #     lowest_cost_params = self._get_parameter_string_for_config('lowest_cost', config)
+        #     lowest_error_params = self._get_parameter_string_for_config('lowest_l2', config)
+        #     optimal_neutral_params = self._get_parameter_string_for_config('optimal_neutral', config)
+            
+        #     # Create row with all four data columns
+        #     row_data = [config_string, lowest_cost_params, lowest_error_params, optimal_neutral_params]
+        #     table_data.append(row_data)
+
+        # Get all unique config_ids and sort them
+        all_config_ids = set()
+        for dataset in self.datasets.values():
+            all_config_ids.update(dataset['config_id'].tolist())
+        
+        sorted_config_ids = sorted(list(all_config_ids))
         
         if self.verbose:
-            print(f"   Found {len(sorted_configs)} configurations")
+            print(f"   Found {len(sorted_config_ids)} configurations")
             print(f"   Categories: {list(self.datasets.keys())}")
         
-        # Create table data with configuration as first column
+        # Create table data
         table_data = []
         
-        for config in sorted_configs:
-            initial_ref, eval_budget, max_level = config
+        for config_id in sorted_config_ids:
+            lowest_cost_params = self._get_parameter_string_for_config('lowest_cost', config_id)
+            lowest_error_params = self._get_parameter_string_for_config('lowest_l2', config_id)
+            optimal_neutral_params = self._get_parameter_string_for_config('optimal_neutral', config_id)
             
-            # Format configuration string
-            config_string = f"{initial_ref},{eval_budget},{max_level}"
-            
-            # Get parameter strings for each category
-            lowest_cost_params = self._get_parameter_string_for_config('lowest_cost', config)
-            lowest_error_params = self._get_parameter_string_for_config('lowest_l2', config)
-            optimal_neutral_params = self._get_parameter_string_for_config('optimal_neutral', config)
-            
-            # Create row with all four data columns
-            row_data = [config_string, lowest_cost_params, lowest_error_params, optimal_neutral_params]
+            row_data = [config_id, lowest_cost_params, lowest_error_params, optimal_neutral_params]
             table_data.append(row_data)
         
         # Create matplotlib figure and table
@@ -647,43 +689,62 @@ class KeyModelsAnalyzer:
         
         plt.close()
 
-    def _get_parameter_string_for_config(self, category_key, config_tuple):
-        """
-        Get formatted parameter string for a specific configuration and category.
+    # def _get_parameter_string_for_config(self, category_key, config_tuple):
+    #     """
+    #     Get formatted parameter string for a specific configuration and category.
         
-        Looks up the model matching the given configuration in the specified
-        category and returns a formatted string of its training parameters.
+    #     Looks up the model matching the given configuration in the specified
+    #     category and returns a formatted string of its training parameters.
         
-        Args:
-            category_key: Key identifying the model category ('lowest_cost',
-                'lowest_l2', or 'optimal_neutral').
-            config_tuple: Tuple of (initial_refinement, eval_budget, max_level).
+    #     Args:
+    #         category_key: Key identifying the model category ('lowest_cost',
+    #             'lowest_l2', or 'optimal_neutral').
+    #         config_tuple: Tuple of (initial_refinement, eval_budget, max_level).
         
-        Returns:
-            str: Formatted parameter string like "y=50.0, s=0.05, r=25, b=30"
-                or "N/A" if no matching model found.
-        """
-        initial_ref, eval_budget, max_level = config_tuple
+    #     Returns:
+    #         str: Formatted parameter string like "y=50.0, s=0.05, r=25, b=30"
+    #             or "N/A" if no matching model found.
+    #     """
+    #     initial_ref, eval_budget, max_level = config_tuple
         
-        # Find the model for this configuration in the specified category
+    #     # Find the model for this configuration in the specified category
+    #     dataset = self.datasets[category_key]
+        
+    #     matching_rows = dataset[
+    #         (dataset['initial_refinement'] == initial_ref) & 
+    #         (dataset['evaluation_element_budget'] == eval_budget) &
+    #         (dataset['max_level'] == max_level)
+    #     ]
+        
+    #     if len(matching_rows) == 0:
+    #         return "N/A"
+    #     elif len(matching_rows) > 1:
+    #         if self.verbose:
+    #             print(f"⚠️ Warning: Multiple matches found for {config_tuple} in {category_key}")
+    #         row = matching_rows.iloc[0]  # Take first match
+    #     else:
+    #         row = matching_rows.iloc[0]
+        
+    #     # Format as "y=γc, s=step_domain, r=rl_iter, b=element_budget"
+    #     param_string = f"y={row['gamma_c']:.1f}, s={row['step_domain_fraction']:.2f}, r={int(row['rl_iterations_per_timestep'])}, b={int(row['element_budget'])}"
+        
+    #     return param_string
+
+    def _get_parameter_string_for_config(self, category_key, config_id):
+        """Get formatted parameter string for a specific configuration and category."""
         dataset = self.datasets[category_key]
         
-        matching_rows = dataset[
-            (dataset['initial_refinement'] == initial_ref) & 
-            (dataset['evaluation_element_budget'] == eval_budget) &
-            (dataset['max_level'] == max_level)
-        ]
+        matching_rows = dataset[dataset['config_id'] == config_id]
         
         if len(matching_rows) == 0:
             return "N/A"
         elif len(matching_rows) > 1:
             if self.verbose:
-                print(f"⚠️ Warning: Multiple matches found for {config_tuple} in {category_key}")
-            row = matching_rows.iloc[0]  # Take first match
+                print(f"⚠️ Warning: Multiple matches found for {config_id} in {category_key}")
+            row = matching_rows.iloc[0]
         else:
             row = matching_rows.iloc[0]
         
-        # Format as "y=γc, s=step_domain, r=rl_iter, b=element_budget"
         param_string = f"y={row['gamma_c']:.1f}, s={row['step_domain_fraction']:.2f}, r={int(row['rl_iterations_per_timestep'])}, b={int(row['element_budget'])}"
         
         return param_string
@@ -1276,10 +1337,16 @@ class KeyModelsAnalyzer:
             y_pos = row['final_l2_error']
             
             # Create annotation text (similar to flagship annotations)
+            # Build config string — handle burn-in (no initial_refinement) vs fixed-ref
+            if pd.notna(row.get('initial_refinement')):
+                config_str = f"({int(row['initial_refinement'])},{int(row['evaluation_element_budget'])},{int(row['max_level'])})"
+            else:
+                config_str = f"(burnin,{int(row['evaluation_element_budget'])},{int(row['max_level'])})"
+            
             annotation_text = (
                 f"{label.upper()}  Category: {category.replace('_', ' ').title()}\n"
                 f"γc={row['gamma_c']:.1f}, s={row['step_domain_fraction']:.3f}, r={int(row['rl_iterations_per_timestep'])}, b={int(row['element_budget'])}\n"
-                f"Config: ({int(row['initial_refinement'])},{int(row['evaluation_element_budget'])},{int(row['max_level'])})\n"
+                f"Config: {config_str}\n"
                 f"L2 Error: {row['final_l2_error']:.2e}, Cost Ratio: {row['cost_ratio']:.3f}"
             )
             
@@ -1593,13 +1660,11 @@ class KeyModelsAnalyzer:
         ax.set_xlim(cost_min - cost_padding, cost_max + cost_padding)
         ax.set_ylim(error_min / error_padding_factor, error_max * error_padding_factor)
         
-        # Fix initial elements calculation for (5, 100, 5) configuration
-        # Base level 0 has 4 elements, level 5 has 4 * 2^5 = 128 elements
-        correct_initial_elements = 4 * (2 ** flagship['initial_refinement'])
-
-        # Validate the calculation
-        if flagship['initial_refinement'] == 5:
-            assert correct_initial_elements == 128, f"Expected 128 elements for level 5, got {correct_initial_elements}"
+        # Initial elements calculation — only valid for fixed-ref configs
+        if pd.notna(flagship.get('initial_refinement')):
+            correct_initial_elements = 4 * (2 ** int(flagship['initial_refinement']))
+        else:
+            correct_initial_elements = None  # Burn-in: no fixed initial mesh
 
 
         # Create detailed annotation boxes for each flagship model
@@ -1742,7 +1807,12 @@ class KeyModelsAnalyzer:
         
         for i, (category, flagship) in enumerate(flagship_models.items()):
             # Fix initial elements calculation
-            correct_initial_elements = 4 * (2 ** flagship['initial_refinement'])
+            # Initial elements — only valid for fixed-ref configs
+            if pd.notna(flagship.get('initial_refinement')):
+                correct_initial_elements = 4 * (2 ** int(flagship['initial_refinement']))
+                init_elements_str = str(correct_initial_elements)
+            else:
+                init_elements_str = 'N/A (burn-in)'
             cost_savings = (1 - flagship['cost_ratio']) * 100
             
             # Create tile background
@@ -1764,7 +1834,7 @@ class KeyModelsAnalyzer:
                 f"• L2 Error: {flagship['final_l2_error']:.2e}\n"
                 f"• Cost Ratio: {flagship['cost_ratio']:.4f}\n"
                 f"• Cost Savings: {cost_savings:.1f}%\n"
-                f"• Initial Elements: {correct_initial_elements}"
+                f"• Initial Elements: {init_elements_str}"
             )
             
             ax_specs.text(tile_positions[i], 0.5, tile_text,
@@ -1846,10 +1916,8 @@ class KeyModelsAnalyzer:
                 f"  RL iterations per timestep (N_rl): {flagship['rl_iterations_per_timestep']}",
                 "",
                 "Simulation Configuration:",
-                f"  Initial refinement level: {flagship['initial_refinement']}",
-                f"  Initial number of elements: {flagship['initial_elements']}",
+                f"  Config ID: {flagship['config_id']}",
                 f"  Element budget: {flagship['evaluation_element_budget']}",
-                f"  Initial resource usage ratio: {flagship['initial_elements'] / flagship['evaluation_element_budget']:.3f}",
                 f"  Max refinement level: {flagship['max_level']}",
                 "",
                 "Performance Metrics:",
