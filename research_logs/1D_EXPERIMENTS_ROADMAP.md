@@ -458,4 +458,43 @@ By contrast, b1 converged to 384 elements with literally zero actions from round
 
 ---
 
+### F7: Gaussian bias confirmed via transferability ICs
+
+**Source:** Experiment 1.2 transferability visualization (Session R.8) — Session4 models g5/g8 on icase 10, 12, 16
+**Informs:** Thread 4, Experiments 2.1, 3.1
+
+**Finding:** Session4 models (trained on Gaussian IC, icase=1) systematically ignore negative-valued regions when evaluated on transferability ICs via burn-in visualization. On Mexican hat (icase=16), models refine the central positive peak but leave the negative side lobes at base resolution. On tanh smooth square (icase=10) and sigmoid smooth square (icase=12), models refine only where u > 0, ignoring regions where u < 0 even when those regions contain equally steep gradients.
+
+**Interpretation:** Models learned a spurious correlation during single-IC training: refine where u > 0 rather than where gradients are steep. Since the Gaussian IC is everywhere non-negative, the training data never distinguished between "large solution value" and "region needing refinement." The steady-solve reward signal reinforced this — it rewards mesh quality for the current static solution, and for a Gaussian, high solution values and high gradients are spatially correlated.
+
+**Implication:** Confirms the thesis finding with direct visual evidence. Motivates both Thread 2 (removing `solution_values` from obs space to reduce magnitude-based features) and Thread 4 (replacing steady-solve with timestep-based signal that rewards dynamic accuracy rather than static fit).
+
+---
+
+### F8: Mexican hat training partially addresses negative-value bias
+
+**Source:** Experiment 1.2 transferability visualization (Session R.8) — Session5 models on icase 16
+**Informs:** Thread 4, Experiment 3.1
+
+**Finding:** Session5 models (trained on Mexican hat IC, icase=16, 200k timesteps) do refine around negative side lobes when evaluated on their training IC via burn-in visualization, unlike Session4 models which completely ignore them. However, the refinement is incomplete — negative regions receive less resolution than the positive central peak, despite having comparable gradient magnitudes.
+
+**Interpretation:** Training on an IC with negative values partially breaks the u > 0 correlation, but doesn't eliminate it. The steady-solve reward signal still evaluates static mesh quality, and the Mexican hat's central peak has both higher absolute values and higher gradients than the side lobes, so the training signal still somewhat conflates magnitude with refinement need. A more physically grounded training signal (Thread 4) should decouple these.
+
+**Implication:** Multi-IC training alone (Thread 3) is unlikely to fully solve the generalization problem. The training signal itself needs to change (Thread 4) to provide a reward that is genuinely gradient-sensitive rather than magnitude-sensitive. This was a key factor in prioritizing Thread 4 over Threads 2 and 3.
+
+---
+
+### F9: Session4 top performers ≠ Session5 top performers
+
+**Source:** Experiment 1.2 transferability visualization (Session R.8) — comparison of equivalent configs across sweeps
+**Informs:** Experiment 4.2
+
+**Finding:** Using Session4's top-performing hyperparameter configurations (g5: gamma_25/step_0.1/rl_25/budget_30, g8: gamma_50/step_0.1/rl_25/budget_25) to select Session5 models for comparison is not valid. Different training ICs likely shift the optimal hyperparameter landscape. The Session5 equivalents of g5/g8 showed partial improvement on negative regions but there is no reason to assume these are Session5's best models.
+
+**Interpretation:** Optimal hyperparameters are coupled to the training IC. A configuration that excels at Gaussian refinement may not be optimal for Mexican hat refinement, because the reward landscape and gradient structure differ. Meaningful comparison between training regimes requires independent model selection within each sweep.
+
+**Implication:** Any future cross-sweep comparison (e.g., Thread 4 new-signal models vs. Session4/5) must run full Stage 1–3 analysis independently on each sweep to identify true top performers. Cannot reuse Session4's model rankings for other training conditions.
+
+---
+
 *This roadmap is a living document updated each session. See Maintenance Rules at the top for update protocol.*
