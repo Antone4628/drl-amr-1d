@@ -2,8 +2,8 @@
 
 **Project:** Systematic investigation of evaluation, observation space, and training improvements for 1D DRL-AMR  
 **Created:** February 12, 2025  
-**Last Updated:** February 20, 2025
-**Status:** Thread 1 — Experiment 1.2 In Progress (all 9 burn-in batch evals complete, Stages 1–3 analysis run, baseline integration in progress)
+**Last Updated:** February 28, 2025
+**Status:** Thread 1 — Experiment 1.2 substantially complete (burn-in validated, F6 confirmed, transferability IC visualization confirms Gaussian bias). Thread 4 (Training Signal) design complete, implementation next.
 
 ---
 
@@ -33,11 +33,13 @@ Before investing in retraining with improved observation spaces or curriculum st
 | 1. Evaluation Protocol | Burn-in initialization, adaptation regime | None | Existing session4 models |
 | 2. Observation Space | Remove/replace `solution_values`, alternative components | Thread 1 complete | Requires retraining |
 | 3. Curriculum Learning | Multi-IC training, progressive difficulty | Threads 1 & 2 complete | Requires retraining |
-| 4. Reserved | Unknown unknowns discovered during Threads 1–3 | As needed | TBD |
+| 4. Training Signal | Replace steady-solve with fake-timestep delta-u in training | Thread 1 core complete | Requires retraining |
 
 ### Sequencing Rationale
 
 Thread 1 uses existing trained models — no retraining required. This lets us improve the evaluation protocol first so that Threads 2 and 3 can be assessed fairly. Thread 2 (observation space changes) requires retraining but can leverage the improved evaluation protocol. Thread 3 (curriculum learning) benefits from both the improved evaluation protocol and the improved observation space, avoiding confounded results from varying multiple things simultaneously.
+
+**Updated 2025-02-28:** Thread 4 (Training Signal) now takes priority over Threads 2 and 3. Burn-in transferability visualization (R.8) confirmed that even Mexican-hat-trained models (session5) don't fully resolve negative side lobes, indicating the training signal itself — not just the observation space or training IC — is the fundamental limitation. Replacing the steady-solve with a physics-based timestep comparison changes *how the agent learns*, which is more foundational than changing what it sees (Thread 2) or what data it trains on (Thread 3). Revised ordering: Thread 1 (core complete) → Thread 4 → Thread 2 → Thread 3.
 
 ### Branching Strategy
 
@@ -91,7 +93,7 @@ Threads 2 and 3 branching strategy will be decided when we get there, informed b
 - Persistent mesh churn at net-zero equilibrium observed in r6 model (F5)
 
 ### Experiment 1.2: Stopping Criterion Design
-**Status:** In Progress — all 9 burn-in batch evaluations complete on Borah, Stages 1–3 analysis run, hypothesis confirmed (F6), baseline integration and Stage 3 plotting fixes in progress  
+**Status:** In Progress — all 9 burn-in batch evaluations complete on Borah, Stages 1–3 analysis run, hypothesis confirmed (F6), Stage 3 plotting bugs fixed (R.7), burn-in transferability visualization next  
 **Experiment Log:** `research_logs/EXP_LOG_1_2_stopping_criterion.md`
 
 **Objective:** Define a concrete, automatable stopping rule for burn-in based on Experiment 1.1 findings.
@@ -152,7 +154,7 @@ Threads 2 and 3 branching strategy will be decided when we get there, informed b
 
 **Objective:** Train models without the `solution_values` observation component and compare performance using the Thread 1 evaluation protocol.
 
-**Depends on:** Thread 1 complete
+**Depends on:** Thread 4 complete
 
 ### Experiment 2.2: Alternative Observation Components
 **Status:** Not Started  
@@ -182,7 +184,7 @@ Threads 2 and 3 branching strategy will be decided when we get there, informed b
 
 **Objective:** Train models on diverse initial conditions to prevent single-IC overfitting.
 
-**Depends on:** Thread 2 complete
+**Depends on:** Threads 2 and 4 complete
 
 ### Experiment 3.2: Progressive Difficulty
 **Status:** Not Started  
@@ -194,9 +196,53 @@ Threads 2 and 3 branching strategy will be decided when we get there, informed b
 
 ---
 
-## Thread 4: Reserved
+## Thread 4: Training Signal
 
-Placeholder for investigations that emerge during Threads 1–3. When adding experiments here, assign numbers starting at 4.1 and document the motivation (which earlier experiment revealed the need).
+**Goal:** Replace the steady-solve reward signal with a physically meaningful timestep-based comparison, eliminating the disconnect between how models train and how they are evaluated.
+
+**Motivation:** During training, after the agent adapts a single element, a steady-state solve is performed on the new mesh to get the "best possible" solution. The reward is based on comparing this steady solution to the pre-action state. This is (a) computationally expensive, (b) disconnected from actual PDE time-stepping during evaluation, and (c) potentially masking the agent from learning about temporal dynamics. Burn-in transferability visualization (R.8) confirmed that even session5 models (trained on Mexican hat IC) don't fully resolve negative side lobes, suggesting the training signal itself is fundamentally limiting what models can learn.
+
+**Proposed approach (from advisor meeting, 2025-02-28):**
+1. Agent takes action → mesh adapts → project solution onto new mesh (no steady-solve)
+2. Perform "fake timestep" on both old mesh/solution and new mesh/solution
+3. Compare evolved solutions to compute delta_u (same integration method as current)
+4. Use delta_u for reward, then discard evolved solutions and continue from post-action state
+
+This asks "does this mesh change improve the solver's ability to advance the PDE?" rather than "does this mesh fit the current solution well?" — a more physically meaningful training signal.
+
+**Open Design Decisions (resolve before experiments):**
+- Timestep selection for fake evolution: use old mesh dt, new mesh dt, min, max, or something else?
+- Multiple fake timesteps for cases with very small dt (advisor suggestion — defer to after single-dt works)
+- Do-nothing handling: delta_u = 0, skip fake timesteps entirely (confirmed)
+
+**Key Code Changes:**
+- `dg_amr_env.py` → `step()` method: replace steady-solve block with fake-timestep comparison
+- `dg_amr_env.py` → new helper method for fake-timestep delta_u computation
+- `interactive_amr_testing.ipynb` → modified version for human-as-agent validation of new signal
+
+### Experiment 4.1: Implement and Validate Fake-Timestep Delta-U
+**Status:** Not Started
+**Experiment Log:** Create when starting (`EXP_LOG_4_1_fake_timestep_delta_u.md`)
+
+**Objective:** Implement the fake-timestep reward signal in the training environment, validate it produces physically meaningful gradients, and verify basic training works.
+
+**Phases:**
+- **A: Core implementation** — Modify `step()` in `dg_amr_env.py`. Preserve old solution/grid, apply action + project, run fake timestep on both, compare, discard evolved solutions.
+- **B: Interactive validation** — Modified `interactive_amr_testing.ipynb` for human-as-agent testing. Verify: refinement near gradients → positive delta-u signal, refinement in smooth regions → ~zero delta-u.
+- **C: Smoke training** — Short training run (5k–10k steps) to verify environment stability, reward ranges, basic learning signal.
+- **D: Diagnostic training** — Small sweep (e.g., 9 models, single IC) to characterize training dynamics. Compare reward curves, action distributions, convergence speed vs. steady-solve baseline.
+
+**Depends on:** Thread 1 core complete
+**Blocks:** Experiment 4.2
+
+### Experiment 4.2: Full Sweep + Evaluation
+**Status:** Not Started
+**Experiment Log:** Create when starting (`EXP_LOG_4_2_full_sweep.md`)
+
+**Objective:** Full 81-model parameter sweep with fake-timestep training signal. Evaluate with burn-in protocol and compare against session4/session5 results.
+
+**Depends on:** Experiment 4.1
+**Blocks:** Thread 2
 
 ---
 
@@ -229,6 +275,12 @@ Placeholder for investigations that emerge during Threads 1–3. When adding exp
 | 2025-02-20 | Cost_ratio baseline: use solver's actual step_count, not independent dt calculation | The R.4 independent dt formula (`courant_max * dx_min / wave_speed`) didn't match solver's `_compute_timestep()` which includes a `/2` stability margin. This caused baseline timesteps to be half the actual count, inflating cost_ratio above 1.0 for low max_levels. Fix: `no_amr_baseline_cost = baseline_elements * step_count`. Both AMR and uniform mesh use the same dt (driven by same finest level), so step_count is correct for both. |
 | 2025-02-20 | SLURM script naming: include max_level | `create_batch_evaluation_jobs.py` burn-in filename was `batch_model_evaluation_burnin_budget_{B}.slurm` — multiple max_levels overwrote each other. Fixed to `batch_model_evaluation_burnin_budget_{B}_max_{M}.slurm`. |
 | 2025-02-20 | `key_models_analyzer.py`: protocol-aware paths and defaults | Constructor accepts `protocol` arg. `data_dir` includes protocol subdirectory. `--output-subdir` defaults to protocol value instead of hardcoded `uniform_initial_max`. Default protocol set to `burnin`. Baseline loading updated to concat all matching files in protocol directory. |
+| 2025-02-22 | Revert baseline glob in `key_models_analyzer.py` | R.6 changed `_load_baseline_data` to glob all `baseline_results_conventional-amr_*.csv` files and concat — caused legend explosion (63+ entries, one per threshold × config). Reverted to single representative file. Baseline representation for cross-config Stage 3 plots is a deferred design decision. |
+| 2025-02-22 | `manual_flagship` baseline control via CLI | `run_analysis()` now passes `stage3_baselines` flag to `create_manual_flagship_plot()`. Default is baselines off. Previously `manual_flagship` always called with `include_baselines=True`. |
+| 2025-02-28 | Replace steady-solve with fake-timestep delta-u (advisor meeting) | Current steady-solve training signal is computationally expensive and disconnected from evaluation. Fake-timestep comparison asks "does this mesh improve PDE advancement?" — more physically meaningful. Session5 transferability visualization confirmed training signal is the fundamental limitation, not just obs space or IC choice. |
+| 2025-02-28 | Thread 4 (Training Signal) takes priority over Threads 2 and 3 | Training signal change is more foundational than obs space (Thread 2) or curriculum (Thread 3). Changes *how the agent learns*, affecting all downstream experiments. |
+| 2025-02-28 | Merge `feature/burnin-evaluation` to main, create `feature/delta-u-reward` | Burn-in evaluation protocol validated. Thread 1 core work complete. New branch for Thread 4 implementation. |
+| 2025-02-28 | Experiments 1.3 and 1.4 deferred, not abandoned | Burn-in vs fixed-ref comparison (1.3) is now a documentation exercise given F6. Adaptation regime (1.4) is still relevant but lower priority than fixing the training signal. |
 
 ---
 
@@ -239,13 +291,15 @@ Quick-reference status of all experiments. Updated each session.
 | ID | Name | Status | Key Finding | Log File |
 |----|------|--------|-------------|----------|
 | 1.1 | Burn-in diagnostics | Complete | 8/10 converge (rounds 5–9); 2/10 oscillate (constraint artifact); zero net change × 3 is viable stopping criterion. See F1–F5. | `research_logs/EXP_LOG_1_1_burnin_diagnostics.md` |
-| 1.2 | Stopping criterion | In Progress | Burn-in init implemented in `run_single_model()` and `evaluate_single_model_by_index.py`. Local tests pass. Cost_ratio baseline updated to max-level uniform mesh. Eval protocol subdirectory restructure complete (fixed_ref/burnin). All 9 burn-in batch evals complete. **Horizontal band hypothesis confirmed (F6).** Stages 1–3 analysis run. Baseline integration and Stage 3 plotting fixes in progress. | `research_logs/EXP_LOG_1_2_stopping_criterion.md` |
+| 1.2 | Stopping criterion | In Progress | Burn-in init implemented in `run_single_model()` and `evaluate_single_model_by_index.py`. Local tests pass. Cost_ratio baseline updated to max-level uniform mesh. Eval protocol subdirectory restructure complete (fixed_ref/burnin). All 9 burn-in batch evals complete. **Horizontal band hypothesis confirmed (F6).** Stages 1–3 analysis run. Stage 3 label bug and burn-in compatibility bugs fixed (R.7). Models g8/r3 selected for transferability IC burn-in visualization. | `research_logs/EXP_LOG_1_2_stopping_criterion.md` |
 | 1.3 | Burn-in vs full-ref | Not started | — | — |
 | 1.4 | Adaptation regime | Not started | — | — |
 | 2.1 | Remove solution_values | Not started | — | — |
 | 2.2 | Alternative obs components | Not started | — | — |
 | 3.1 | Multi-IC training | Not started | — | — |
 | 3.2 | Progressive difficulty | Not started | — | — |
+| 4.1 | Fake-timestep delta-u | Not started | — | — |
+| 4.2 | Full sweep (new signal) | Not started | — | — |
 
 ---
 
@@ -260,6 +314,8 @@ Quick-reference status of all experiments. Updated each session.
 | R.4 | 2025-02-17 | Burn-in init implementation (Exp 1.2) | Implemented burn-in init path in `run_single_model()` with `--burnin-init`, `--burnin-rounds`, `--burnin-convergence-patience` CLI args. Updated all visualization functions with `burnin_metadata` passthrough. Updated `evaluate_single_model_by_index.py` with optional burnin arg and CSV columns. Decoupled verbose from solver/adapter. Fixed duplicate Training Parameters prefix. Updated cost_ratio to max-level uniform baseline. Created `research_logs/` directory, moved roadmap and logs there. Local tests pass for both burn-in and fixed-ref paths. | First session with filesystem MCP read/write. Cost_ratio baseline change discussed — Option A (max-level uniform) chosen for protocol independence. Advisor consulted via Slack. |
 | R.5 | 2025-02-18 | Eval protocol subdirectory restructure (Exp 1.2) | Restructured evaluation output into protocol-specific subdirectories (`fixed_ref/`, `burnin/`) to prevent overwrites and enable side-by-side comparison. Modified 7 scripts: evaluate_single_model_by_index.py (writer), create_batch_evaluation_jobs.py (job gen), batch_model_evaluation_template.slurm (template), comprehensive_analyzer.py (Stage 1), pareto_key_models_analyzer.py (Stage 2), key_models_analyzer.py (Stage 3). Updated all 3 test files. All 298 tests pass. | No existing eval data on Mac or Borah — no migration needed. Phase 7 (data migration) was a no-op. |
 | R.6 | 2025-02-20 | Burn-in batch evaluation + analysis (Exp 1.2) | Ran all 9 burn-in batch evaluations (3 budgets × 3 max_levels) on Borah. Fixed cost_ratio baseline bug (independent dt formula didn't match solver's stability margin — reverted to using solver.dt via step_count). Fixed SLURM script naming collision (added max_level to filename). Ran Stages 1–3 analysis. **Hypothesis confirmed: horizontal band of poorly-performing models disappears with burn-in (F6).** Added `--protocol` and `--output-subdir` to `key_models_analyzer.py`. Updated baseline loading to concat all matching files. Added `seaborn` import. Copied conventional-AMR baseline files from archive repo. | Cost_ratio fix: original formula used `actual_initial_elements` (wrong for burn-in) — R.4 replaced with independent dt calc that also had a bug (missing /2 stability margin). Final fix: `baseline_elements * step_count` where `baseline_elements = 4 * 2^max_level`. Stage 3 baseline plotting has two open bugs: legend explosion (70+ entries) and `baseline_mode='none'` override. |
+| R.7 | 2025-02-22 | Stage 3 bug fixes + model selection (Exp 1.2) | Fixed 4 bugs in `key_models_analyzer.py` by diffing against archive version: (1) `_add_data_labels` restored b/g/r label generation from category column (was using nonexistent `model_label` column, wrong y-coordinate), (2) `_load_baseline_data` reverted from glob (R.6 change that caused 63+ legend entries) to single representative file, (3) burn-in compatibility guards for `initial_refinement`/`initial_elements` in 4 methods, (4) `create_parameter_table`/`_get_parameter_string_for_config` switched from NaN-prone tuple to `config_id` matching. Added baseline control to `manual_flagship` via `stage3_baselines` flag. Generated labeled Stage 3 plot. Selected models g8 and r3 for transferability IC burn-in visualization. | Baseline representation for cross-config plots still needs design decision (which single file to use). Deferred. `visualize_burnin.py` y-axis hardcoded for Gaussian — needs dynamic range for negative-valued ICs. |
+| R.8 | 2025-02-28 | Transferability visualization + Thread 4 planning | Extracted g5/g8 model params from aggregate CSVs. Fixed `visualize_burnin.py` y-axis (dynamic range from exact solution, replacing hardcoded Gaussian limits). Ran burn-in visualizations for g5/g8 on icase 10, 12, 16 — confirmed u>0 Gaussian bias in session4 models. Transferred session5_mexican_hat_200k models to clean repo (Borah full copy, Mac stripped via tarball). Ran session5 equivalents on icase 16 — partial improvement but still not fully resolving negative side lobes. Advisor meeting: decided to replace steady-solve with fake-timestep delta-u. Designed Thread 4 (Training Signal). Updated roadmap with Thread 4, revised thread ordering. | SSH rate limiting on Borah required tarball approach for Mac transfer. Session5 models confirm training signal is the fundamental limitation. |
 
 ---
 

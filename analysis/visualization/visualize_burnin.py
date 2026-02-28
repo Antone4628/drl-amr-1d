@@ -193,7 +193,7 @@ def create_burnin_animation(data, output_path=None, show=False, fps=2, dpi=150):
 
     # --- Main axis: solution + mesh ---
     ax_main.set_xlim([-1.05, 1.05])
-    ax_main.set_ylim([-0.15, 1.15])
+    
     ax_main.set_xlabel('Domain Position', fontsize=11)
     ax_main.set_ylabel('Solution Value', fontsize=11)
 
@@ -201,6 +201,9 @@ def create_burnin_animation(data, output_path=None, show=False, fps=2, dpi=150):
     s0 = snapshots[0]
     exact_x = np.linspace(-1, 1, 500)
     exact_sol_dense = exact_solution(exact_x, len(exact_x), 0.0, bp['icase'])[0]
+    y_min, y_max = exact_sol_dense.min(), exact_sol_dense.max()
+    y_margin = 0.15 * (y_max - y_min)
+    ax_main.set_ylim([y_min - y_margin, y_max + y_margin])
     ax_main.plot(exact_x, exact_sol_dense, 'r-', linewidth=1.5, alpha=0.5,
                  label='Exact (dense)', zorder=1)
 

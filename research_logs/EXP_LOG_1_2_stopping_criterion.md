@@ -2,7 +2,7 @@
 
 **Thread:** 1 — Evaluation Protocol  
 **Created:** February 17, 2025  
-**Last Updated:** February 18, 2025  
+**Last Updated:** February 22, 2025  
 **Status:** In Progress
 
 ---
@@ -74,6 +74,13 @@ TBD — batch evaluation job to be created in next session (R.5).
 | 2025-02-17 | Updated cost_ratio baseline to uniform max-level mesh | baseline = 4 * 2^max_level elements with self-consistent dt. Protocol-independent. | Advisor consulted on Slack re: baseline options A/B/C. Implemented Option A. |
 | 2025-02-18 | Implemented eval protocol subdirectory restructure (Phases 1–8) | All 7 scripts updated, 3 test files updated, 298 tests pass. Output now goes to `fixed_ref/` or `burnin/` subdirectories. | Session R.5. No data migration needed (no existing eval data on Mac or Borah). |
 | 2025-02-18 | Committed restructure changes | `git commit` on `feature/burnin-evaluation` branch. 9 modified files. | Test-generated SLURM files (Mac paths) deleted before commit. |
+| 2025-02-22 | Fixed `_add_data_labels` in `key_models_analyzer.py` | Restored b/g/r label generation from category column. Was using nonexistent `model_label` column (fell back to DataFrame index 0–26). Also fixed y-coordinate: was `grid_normalized_l2_error`, now `final_l2_error` to match scatter plots. | Discovered by diffing against archive repo version. |
+| 2025-02-22 | Reverted `_load_baseline_data` glob to single file | R.6 changed to glob all `baseline_results_conventional-amr_*.csv` and concat — caused 63+ legend entries (one per threshold × config). Reverted to single hardcoded representative file. | Baseline representation for cross-config Stage 3 is deferred design decision. |
+| 2025-02-22 | Fixed burn-in compatibility in 4 methods | Guarded `initial_refinement`/`initial_elements` references with `pd.notna()` in `_add_flagship_annotations`, `create_flagship_summary_plot`, `create_flagship_summary_dashboard`, `generate_flagship_summary_report`. | These would crash on burn-in configs where initial_refinement is NaN. |
+| 2025-02-22 | Fixed `create_parameter_table` / `_get_parameter_string_for_config` | Switched from tuple matching `(initial_refinement, eval_budget, max_level)` to `config_id` string matching. NaN in tuple caused no matches for burn-in configs. | |
+| 2025-02-22 | Added baseline control to `manual_flagship` | `run_analysis()` now passes `stage3_baselines` flag to `create_manual_flagship_plot()`. Default baselines off. | Previously hardcoded `include_baselines=True`. |
+| 2025-02-22 | Generated labeled Stage 3 burn-in plot | 27 key models with b/g/r labels, no ideal point. Labels working correctly. | Output: `aggregate_analysis/burnin/stage3_overview_key_models_labeled_no_ideal.png` |
+| 2025-02-22 | Selected models g8 and r3 for transferability IC burn-in visualization | g8 (optimal_neutral, ~5e-5 error, ~0.28 cost) and r3 (lowest_l2, ~7e-5 error, ~0.25 cost) sit on lower Pareto front. Good candidates to demonstrate burn-in behavior on negative-valued ICs (Mexican hat, tanh, sigmoid). | Need to extract actual training parameters from aggregate CSVs on Borah. |
 
 ## Results
 
@@ -127,3 +134,4 @@ TBD.
 | 2025-02-18 | `tests/analysis/test_comprehensive_analyzer.py` | Modified — fixed_ref subdirectory in fixtures |
 | 2025-02-18 | `tests/analysis/test_pareto_key_models_analyzer.py` | Modified — fixed_ref subdirectory in fixtures |
 | 2025-02-18 | `tests/analysis/test_key_models_analyzer.py` | Modified — fixed_ref subdirectory in fixtures |
+| 2025-02-22 | `analysis/model_performance/key_models_analyzer.py` | Modified — 4 bug fixes (labels, baseline glob revert, burn-in guards, config_id matching), manual_flagship baseline control |
