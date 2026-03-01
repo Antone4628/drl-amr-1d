@@ -53,6 +53,55 @@ from ..amr.projection import projections
 from .utils import exact_solution, eff
 
 
+
+def _lsrk45_evolve(q, Dhat, periodicity, dt, n_steps=1):
+        """Evolve solution using low-storage 5-stage Runge-Kutta without mutating any external state.
+        
+        This is the same LSRK45 scheme used by DGAdvectionSolver.step(), extracted
+        as a standalone function for use in fake-timestep reward computation where
+        solver state must not be modified.
+        
+        Args:
+            q: Solution vector, shape (npoin_dg,). Not modified.
+            Dhat: Combined DG operator M^{-1}(D - F), shape (npoin_dg, npoin_dg).
+            periodicity: Periodicity array for boundary enforcement.
+            dt: Timestep size. Must be CFL-stable for the mesh.
+            n_steps: Number of timesteps to take. Default 1.
+            
+        Returns:
+            np.ndarray: Evolved solution vector, same shape as q.
+        """
+        # Low-storage Runge-Kutta coefficients (Carpenter-Kennedy 4th order)
+        RKA = np.array([
+            0.0,
+            -567301805773.0 / 1357537059087.0,
+            -2404267990393.0 / 2016746695238.0,
+            -3550918686646.0 / 2091501179385.0,
+            -1275806237668.0 / 842570457699.0
+        ])
+        
+        RKB = np.array([
+            1432997174477.0 / 9575080441755.0,
+            5161836677717.0 / 13612068292357.0,
+            1720146321549.0 / 2090206949498.0,
+            3134564353537.0 / 4481467310338.0,
+            2277821191437.0 / 14882151754819.0
+        ])
+        
+        qp = q.copy()
+        for _ in range(n_steps):
+            dq = np.zeros_like(qp)
+            q_stage = qp.copy()
+            for s in range(len(RKA)):
+                R = Dhat @ q_stage
+                for i in range(len(q_stage)):
+                    dq[i] = RKA[s] * dq[i] + dt * R[i]
+                    q_stage[i] = q_stage[i] + RKB[s] * dq[i]
+                if periodicity[-1] == periodicity[0]:
+                    q_stage[-1] = q_stage[0]
+            qp = q_stage
+        return qp
+
 class DGAdvectionSolver:
     """
     Discontinuous Galerkin solver for 1D advection equation with AMR.
@@ -846,15 +895,15 @@ class DGAdvectionSolver:
         self._compute_timestep(use_actual_max_level=True)
         self.verify_state()
         
-        # Solve for steady state
-        self._update_forcing()
-        self.q = self.steady_solve_improved()
+        # Episode starts from exact analytical IC on the random mesh.
+        # No steady-solve — consistent with evaluation protocol.
         
         return self.q
 
     # =========================================================================
     # Time Stepping Methods
     # =========================================================================
+
     
     def step(self, dt=None):
         """
@@ -869,40 +918,7 @@ class DGAdvectionSolver:
         """
         if dt is None:
             dt = self.dt
-        
-        # Low-storage RK coefficients (Carpenter-Kennedy 4th order)
-        RKA = np.array([
-            0.0,
-            -567301805773.0/1357537059087.0,
-            -2404267990393.0/2016746695238.0,
-            -3550918686646.0/2091501179385.0,
-            -1275806237668.0/842570457699.0
-        ])
-        
-        RKB = np.array([
-            1432997174477.0/9575080441755.0,
-            5161836677717.0/13612068292357.0,
-            1720146321549.0/2090206949498.0,
-            3134564353537.0/4481467310338.0,
-            2277821191437.0/14882151754819.0
-        ])
-        
-        dq = np.zeros(self.npoin_dg)
-        qp = self.q.copy()
-        
-        # RK stages
-        for s in range(len(RKA)):
-            R = self.Dhat @ qp
-            
-            for i in range(self.npoin_dg):
-                dq[i] = RKA[s] * dq[i] + dt * R[i]
-                qp[i] = qp[i] + RKB[s] * dq[i]
-            
-            # Enforce periodicity
-            if self.periodicity[-1] == self.periodicity[0]:
-                qp[-1] = qp[0]
-        
-        self.q = qp
+        self.q = _lsrk45_evolve(self.q, self.Dhat, self.periodicity, dt, n_steps=1)
         self.time += dt
     
     def pseudo_step(self, dt=None):

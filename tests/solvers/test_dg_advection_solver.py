@@ -15,7 +15,9 @@ import sys
 sys.path.insert(0, '.')
 
 from numerical.solvers.dg_advection_solver import DGAdvectionSolver
+from numerical.solvers.dg_advection_solver import _lsrk45_evolve
 from numerical.solvers.utils import exact_solution
+
 
 
 # =============================================================================
@@ -736,3 +738,63 @@ class TestEdgeCases:
         
         assert solver.nelem == initial_nelem
         assert np.array_equal(solver.active, initial_active)
+
+
+# =============================================================================
+# Standalone LSRK45 Tests
+# =============================================================================
+
+class TestLSRK45Evolve:
+    """Tests for the standalone _lsrk45_evolve function."""
+    
+    def test_matches_solver_step(self, solver):
+        """Standalone evolve produces identical result to solver.step()."""
+        # Capture pre-step state
+        q_before = solver.q.copy()
+        Dhat = solver.Dhat.copy()
+        periodicity = solver.periodicity.copy()
+        dt = solver.dt
+        
+        # Evolve via standalone function
+        q_standalone = _lsrk45_evolve(q_before, Dhat, periodicity, dt, n_steps=1)
+        
+        # Evolve via solver.step()
+        solver.step(dt)
+        q_solver = solver.q.copy()
+        
+        assert np.allclose(q_standalone, q_solver, atol=1e-14), \
+            f"Max difference: {np.max(np.abs(q_standalone - q_solver))}"
+    
+    def test_does_not_modify_input(self, solver):
+        """Standalone evolve does not modify the input solution array."""
+        q_original = solver.q.copy()
+        q_input = solver.q.copy()
+        
+        _lsrk45_evolve(q_input, solver.Dhat, solver.periodicity, solver.dt)
+        
+        assert np.array_equal(q_input, q_original)
+    
+    def test_multiple_steps_match_sequential(self, solver):
+        """n_steps=3 matches three sequential single-step calls."""
+        q0 = solver.q.copy()
+        Dhat = solver.Dhat.copy()
+        periodicity = solver.periodicity.copy()
+        dt = solver.dt
+        
+        # Three steps via n_steps parameter
+        q_multi = _lsrk45_evolve(q0, Dhat, periodicity, dt, n_steps=3)
+        
+        # Three sequential single steps
+        q_seq = q0.copy()
+        for _ in range(3):
+            q_seq = _lsrk45_evolve(q_seq, Dhat, periodicity, dt, n_steps=1)
+        
+        assert np.allclose(q_multi, q_seq, atol=1e-14)
+    
+    def test_zero_dt_returns_copy(self, solver):
+        """Zero timestep returns unchanged solution."""
+        q_original = solver.q.copy()
+        q_evolved = _lsrk45_evolve(q_original, solver.Dhat, solver.periodicity, 
+                                    dt=0.0, n_steps=1)
+        
+        assert np.allclose(q_evolved, q_original, atol=1e-14)

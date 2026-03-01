@@ -36,8 +36,16 @@ from gymnasium import spaces
 from time import time
 from typing import Optional, Dict, Tuple, Any
 import matplotlib.pyplot as plt
+from collections import namedtuple
 
 from ..solvers.dg_advection_solver import DGAdvectionSolver
+from ..solvers.dg_advection_solver import _lsrk45_evolve
+
+
+# Lightweight snapshot of solver state for fake-timestep comparison.
+# Used in _compute_fake_timestep_delta_u to evolve old and new mesh states
+# without mutating solver internals.
+MeshState = namedtuple('MeshState', ['q', 'Dhat', 'periodicity', 'coord', 'dt'])
 
 
 class RewardCalculator:
@@ -703,6 +711,40 @@ class DGAMREnv(gym.Env):
             
         self._total_episodes += 1
         return observation, reward, terminated, truncated, info
+    
+    # =========================================================================
+    # Delta_u Methods
+    # =========================================================================
+    
+
+    def _compute_fake_timestep_delta_u(self, old_state, new_state, fake_dt, n_steps=1):
+        """Compute delta_u by evolving old and new mesh states and comparing results.
+        
+        Performs a "fake timestep" on both pre-adaptation and post-adaptation
+        mesh/solution snapshots using the standalone LSRK45 integrator, then
+        computes the L1 difference between evolved solutions. Neither the solver
+        state nor the input MeshState objects are modified.
+        
+        This replaces the steady-solve approach: instead of asking "does this mesh
+        fit the current solution?", it asks "does this mesh change improve the
+        solver's ability to advance the PDE?"
+        
+        Args:
+            old_state: MeshState snapshot from before adaptation.
+            new_state: MeshState snapshot from after adaptation (projected solution).
+            fake_dt: CFL-safe timestep for both meshes — use min(old_dt, new_dt).
+            n_steps: Number of fake timesteps to take (default 1).
+            
+        Returns:
+            float: L1 norm of the difference between evolved solutions (delta_u).
+        """
+        old_evolved = _lsrk45_evolve(
+            old_state.q, old_state.Dhat, old_state.periodicity, fake_dt, n_steps
+        )
+        new_evolved = _lsrk45_evolve(
+            new_state.q, new_state.Dhat, new_state.periodicity, fake_dt, n_steps
+        )
+        return calculate_delta_u(old_evolved, new_evolved, old_state.coord, new_state.coord)
 
     # =========================================================================
     # Core Gymnasium Methods
@@ -714,12 +756,14 @@ class DGAMREnv(gym.Env):
         The step proceeds as follows:
         1. Map discrete action to {-1, 0, 1}
         2. Validate action; override to 0 if invalid
-        3. Apply mesh adaptation
-        4. Solve for steady-state solution on new mesh
-        5. Calculate reward based on solution change and resource usage
-        6. Optionally advance PDE in time (if enough RL steps taken)
-        7. Select next element randomly
-        8. Return new observation
+        3. Capture pre-adaptation mesh state snapshot
+        4. Apply mesh adaptation (solution projected onto new mesh)
+        5. Compute fake-timestep delta_u: evolve both old and new mesh states
+           one timestep, compare evolved solutions. Discard evolved solutions.
+        6. Calculate reward based on delta_u and resource usage
+        7. Optionally advance PDE in time (if enough RL steps taken)
+        8. Select next element randomly
+        9. Return new observation
         
         Args:
             action: Integer action from agent (0, 1, or 2).
@@ -766,9 +810,14 @@ class DGAMREnv(gym.Env):
             return self._end_episode(0.0, False, True, "Maximum episode steps reached")
         
         # === Store Pre-Adaptation State ===
-        old_solution = self.solver.q.copy()
-        old_grid = self.solver.coord.copy()
         old_resources = len(self.solver.active) / self.element_budget
+        old_state = MeshState(
+            q=self.solver.q.copy(),
+            Dhat=self.solver.Dhat.copy(),
+            periodicity=self.solver.periodicity.copy(),
+            coord=self.solver.coord.copy(),
+            dt=self.solver.dt
+        )
         
         # === Index Validation ===
         if self.current_element_index >= len(self.solver.active):
@@ -779,28 +828,26 @@ class DGAMREnv(gym.Env):
         self.solver.adapt_mesh(marks_override=marks_override, 
                                element_budget=self.element_budget)
         
-        # === Solve for Steady-State Solution ===
-        # After mesh adaptation, solve for the steady-state solution that
-        # matches the exact solution at the current time. This gives the
-        # "best possible" solution on the new mesh.
-        projected_solution = self.solver.q.copy()
-        
-        # Standard solve (unused but kept for potential comparison)
-        steady_solution = self.solver.steady_solve()
-        
-        # Improved solve (used for training)
-        self.solver.q = projected_solution.copy()
-        improved_steady_solution = self.solver.steady_solve_improved()
-        self.solver.q = improved_steady_solution
-        
-        # === Get Post-Adaptation State ===
-        post_adapt_solution = improved_steady_solution
-        post_adapt_grid = self.solver.coord.copy()
+        # === Compute Fake-Timestep Delta-U ===
+        # Instead of steady-solve, compare how well old vs new mesh advance the PDE.
+        # Solver continues from projected solution (no steady-solve replacement).
         post_adapt_resources = len(self.solver.active) / self.element_budget
         
-        # === Calculate Solution Change ===
-        delta_u_adapt = calculate_delta_u(old_solution, post_adapt_solution, 
-                                          old_grid, post_adapt_grid)
+        if mapped_action == 0:
+            # Do-nothing: no mesh change, skip fake timestep
+            delta_u_adapt = 0.0
+        else:
+            new_state = MeshState(
+                q=self.solver.q,  # projected solution — no copy needed, not mutated below
+                Dhat=self.solver.Dhat,
+                periodicity=self.solver.periodicity,
+                coord=self.solver.coord,
+                dt=self.solver.dt
+            )
+            fake_dt = min(old_state.dt, new_state.dt)
+            delta_u_adapt = self._compute_fake_timestep_delta_u(
+                old_state, new_state, fake_dt, n_steps=1
+            )
         
         # === Budget Check ===
         if len(self.solver.active) >= self.element_budget:

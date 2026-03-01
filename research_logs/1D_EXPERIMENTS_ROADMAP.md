@@ -2,8 +2,8 @@
 
 **Project:** Systematic investigation of evaluation, observation space, and training improvements for 1D DRL-AMR  
 **Created:** February 12, 2025  
-**Last Updated:** February 28, 2025
-**Status:** Thread 1 — Experiment 1.2 substantially complete (burn-in validated, F6 confirmed, transferability IC visualization confirms Gaussian bias). Thread 4 (Training Signal) design complete, implementation next.
+**Last Updated:** March 1, 2025
+**Status:** Thread 1 — Experiment 1.2 substantially complete (burn-in validated, F6 confirmed, transferability IC visualization confirms Gaussian bias). Thread 4 — Experiment 4.1 Phases A+B complete (fake-timestep delta-u implemented and validated). Phase C (smoke training) next.
 
 ---
 
@@ -221,8 +221,8 @@ This asks "does this mesh change improve the solver's ability to advance the PDE
 - `interactive_amr_testing.ipynb` → modified version for human-as-agent validation of new signal
 
 ### Experiment 4.1: Implement and Validate Fake-Timestep Delta-U
-**Status:** Not Started
-**Experiment Log:** Create when starting (`EXP_LOG_4_1_fake_timestep_delta_u.md`)
+**Status:** In Progress — Phase A (core implementation) and Phase B (interactive validation) complete. Phase C (smoke training) next.
+**Experiment Log:** `research_logs/EXP_LOG_4_1_fake_timestep_delta_u.md`
 
 **Objective:** Implement the fake-timestep reward signal in the training environment, validate it produces physically meaningful gradients, and verify basic training works.
 
@@ -298,7 +298,7 @@ Quick-reference status of all experiments. Updated each session.
 | 2.2 | Alternative obs components | Not started | — | — |
 | 3.1 | Multi-IC training | Not started | — | — |
 | 3.2 | Progressive difficulty | Not started | — | — |
-| 4.1 | Fake-timestep delta-u | Not started | — | — |
+| 4.1 | Fake-timestep delta-u | In Progress | Phase A+B complete: fake-timestep signal implemented, interactive validation confirms physically meaningful gradients (refine near gradients → positive delta_u, smooth regions → near-zero). All 49 tests pass. | `research_logs/EXP_LOG_4_1_fake_timestep_delta_u.md` |
 | 4.2 | Full sweep (new signal) | Not started | — | — |
 
 ---
@@ -316,6 +316,7 @@ Quick-reference status of all experiments. Updated each session.
 | R.6 | 2025-02-20 | Burn-in batch evaluation + analysis (Exp 1.2) | Ran all 9 burn-in batch evaluations (3 budgets × 3 max_levels) on Borah. Fixed cost_ratio baseline bug (independent dt formula didn't match solver's stability margin — reverted to using solver.dt via step_count). Fixed SLURM script naming collision (added max_level to filename). Ran Stages 1–3 analysis. **Hypothesis confirmed: horizontal band of poorly-performing models disappears with burn-in (F6).** Added `--protocol` and `--output-subdir` to `key_models_analyzer.py`. Updated baseline loading to concat all matching files. Added `seaborn` import. Copied conventional-AMR baseline files from archive repo. | Cost_ratio fix: original formula used `actual_initial_elements` (wrong for burn-in) — R.4 replaced with independent dt calc that also had a bug (missing /2 stability margin). Final fix: `baseline_elements * step_count` where `baseline_elements = 4 * 2^max_level`. Stage 3 baseline plotting has two open bugs: legend explosion (70+ entries) and `baseline_mode='none'` override. |
 | R.7 | 2025-02-22 | Stage 3 bug fixes + model selection (Exp 1.2) | Fixed 4 bugs in `key_models_analyzer.py` by diffing against archive version: (1) `_add_data_labels` restored b/g/r label generation from category column (was using nonexistent `model_label` column, wrong y-coordinate), (2) `_load_baseline_data` reverted from glob (R.6 change that caused 63+ legend entries) to single representative file, (3) burn-in compatibility guards for `initial_refinement`/`initial_elements` in 4 methods, (4) `create_parameter_table`/`_get_parameter_string_for_config` switched from NaN-prone tuple to `config_id` matching. Added baseline control to `manual_flagship` via `stage3_baselines` flag. Generated labeled Stage 3 plot. Selected models g8 and r3 for transferability IC burn-in visualization. | Baseline representation for cross-config plots still needs design decision (which single file to use). Deferred. `visualize_burnin.py` y-axis hardcoded for Gaussian — needs dynamic range for negative-valued ICs. |
 | R.8 | 2025-02-28 | Transferability visualization + Thread 4 planning | Extracted g5/g8 model params from aggregate CSVs. Fixed `visualize_burnin.py` y-axis (dynamic range from exact solution, replacing hardcoded Gaussian limits). Ran burn-in visualizations for g5/g8 on icase 10, 12, 16 — confirmed u>0 Gaussian bias in session4 models. Transferred session5_mexican_hat_200k models to clean repo (Borah full copy, Mac stripped via tarball). Ran session5 equivalents on icase 16 — partial improvement but still not fully resolving negative side lobes. Advisor meeting: decided to replace steady-solve with fake-timestep delta-u. Designed Thread 4 (Training Signal). Updated roadmap with Thread 4, revised thread ordering. | SSH rate limiting on Borah required tarball approach for Mac transfer. Session5 models confirm training signal is the fundamental limitation. |
+| R.9 | 2025-03-01 | Exp 4.1 Phase A+B: fake-timestep implementation + validation | Removed steady-solve from solver.reset(). Implemented _lsrk45_evolve() standalone function, MeshState namedtuple, _compute_fake_timestep_delta_u() method. Replaced steady-solve block in env.step() with fake-timestep comparison. Added 8 new tests (4 solver, 4 env). Updated MockSolver. Smoke test with real solver passes. Interactive validation (icase=10) confirms physically meaningful signal: refine near gradients → positive delta_u, smooth regions → near-zero. Created EXP_LOG_4_1. | Implementation followed 6-phase plan from R.8 design session. No changes needed to interactive notebook — it calls env.step() which now uses fake-timestep internally. |
 
 ---
 

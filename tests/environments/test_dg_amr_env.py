@@ -16,10 +16,12 @@ import pytest
 # Add project root to path for imports
 sys.path.insert(0, '.')
 
+
 from numerical.environments.dg_amr_env import (
     RewardCalculator, 
     calculate_delta_u, 
-    DGAMREnv
+    DGAMREnv,
+    MeshState
 )
 
 
@@ -72,6 +74,13 @@ class MockSolver:
         self.q = np.zeros(self.npoin_dg)
         self._init_solution()
         self.coord = np.linspace(-1, 1, self.npoin_dg)
+
+        # DG operator (identity-like for testing — actual math not important)
+        self.Dhat = np.eye(self.npoin_dg) * 0.01
+        
+        # Periodicity array (periodic BCs: first and last nodes are identified)
+        self.periodicity = np.arange(self.npoin_dg)
+        self.periodicity[-1] = self.periodicity[0]  # Periodic wrap
         
     def _init_label_mat(self):
         """Initialize forest label matrix for testing."""
@@ -127,6 +136,9 @@ class MockSolver:
         self._init_solution()
         self.coord = np.linspace(-1, 1, self.npoin_dg)
         self.xelem = np.linspace(-1, 1, self.nelem + 1)
+        self.Dhat = np.eye(self.npoin_dg) * 0.01
+        self.periodicity = np.arange(self.npoin_dg)
+        self.periodicity[-1] = self.periodicity[0]
         
     def adapt_mesh(self, marks_override=None, element_budget=None):
         """Mock mesh adaptation - just updates element count based on action."""
@@ -158,6 +170,9 @@ class MockSolver:
         self._init_solution()
         self.coord = np.linspace(-1, 1, self.npoin_dg)
         self.xelem = np.linspace(-1, 1, self.nelem + 1)
+        self.Dhat = np.eye(self.npoin_dg) * 0.01
+        self.periodicity = np.arange(self.npoin_dg)
+        self.periodicity[-1] = self.periodicity[0]
         
     def steady_solve(self):
         """Mock steady solve - returns current solution."""
@@ -342,6 +357,58 @@ class TestCalculateDeltaU:
         delta = calculate_delta_u(old_solution, new_solution, old_grid, new_grid)
         
         assert delta > 0
+
+
+# =============================================================================
+# Test MeshState and Fake-Timestep Delta-U
+# =============================================================================
+
+class TestFakeTimestepDeltaU:
+    """Tests for the fake-timestep delta_u computation."""
+    
+    def test_do_nothing_returns_zero_delta_u(self, env):
+        """Do-nothing action produces delta_u = 0 (skips fake timestep)."""
+        env.reset()
+        _, _, _, _, info = env.step(1)  # action 1 maps to do-nothing (0)
+        
+        assert info['delta_u'] == 0.0
+    
+    def test_mesh_state_captures_solver_state(self, mock_solver):
+        """MeshState correctly captures solver attributes."""
+        state = MeshState(
+            q=mock_solver.q.copy(),
+            Dhat=mock_solver.Dhat.copy(),
+            periodicity=mock_solver.periodicity.copy(),
+            coord=mock_solver.coord.copy(),
+            dt=mock_solver.dt
+        )
+        
+        assert np.array_equal(state.q, mock_solver.q)
+        assert np.array_equal(state.Dhat, mock_solver.Dhat)
+        assert np.array_equal(state.periodicity, mock_solver.periodicity)
+        assert np.array_equal(state.coord, mock_solver.coord)
+        assert state.dt == mock_solver.dt
+    
+    def test_mesh_state_is_immutable(self, mock_solver):
+        """MeshState fields cannot be reassigned (namedtuple immutability)."""
+        state = MeshState(
+            q=mock_solver.q.copy(),
+            Dhat=mock_solver.Dhat.copy(),
+            periodicity=mock_solver.periodicity.copy(),
+            coord=mock_solver.coord.copy(),
+            dt=mock_solver.dt
+        )
+        
+        with pytest.raises(AttributeError):
+            state.q = np.zeros(10)
+    
+    def test_step_info_still_contains_delta_u(self, env):
+        """Step info dict still contains delta_u key."""
+        env.reset()
+        _, _, _, _, info = env.step(1)
+        
+        assert 'delta_u' in info
+        assert isinstance(info['delta_u'], float)
 
 
 # =============================================================================
