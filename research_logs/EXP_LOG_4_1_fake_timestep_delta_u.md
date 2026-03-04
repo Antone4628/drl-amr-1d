@@ -2,8 +2,8 @@
 
 **Thread:** 4 — Training Signal  
 **Created:** March 1, 2025  
-**Last Updated:** March 1, 2025  
-**Status:** In Progress — Phase A (core implementation) and Phase B (interactive validation) complete.
+**Last Updated:** March 3, 2025  
+**Status:** In Progress — Phases A, B, and C complete. Phase D (diagnostic training) next.
 
 ---
 
@@ -79,6 +79,7 @@ PDE advance (unchanged):
 | 2025-03-01 | Phase A: Implemented _lsrk45_evolve(), refactored step(), added MeshState, _compute_fake_timestep_delta_u(), modified step() in env | All 49 tests pass (solver + environment) | Implementation followed 6-phase plan (IMPL_PLAN_4_1A) |
 | 2025-03-01 | Phase A: Smoke test with real solver | All 4 checks pass: do-nothing=0, refine>=0, no contamination, PDE advance works | smoke_test_fake_timestep.py |
 | 2025-03-01 | Phase B: Interactive validation via interactive_amr_testing.ipynb | Physically meaningful signal confirmed | Refine near gradients -> positive delta_u; refine in smooth regions -> near-zero delta_u; coarsen near gradients -> positive delta_u; coarsen in smooth -> near-zero delta_u |
+| 2025-03-03 | Phase C: Smoke training 10k steps, local CPU | Environment stable, 353 episodes, no crashes/NaNs. 100% budget-exceeded termination. No learning signal yet. | Config: gamma_c=25, step=0.1, rl=10, budget=30, icase=1, A2C. Required VECLIB_MAXIMUM_THREADS=1 to avoid Apple Accelerate BLAS deadlock on macOS. 119 steps/sec. |
 
 ## Results
 
@@ -101,9 +102,27 @@ Expected behavior confirmed:
 
 The signal correctly captures "does this mesh change affect the solver's ability to advance the PDE" rather than "does this mesh fit the current static solution."
 
-### Phase C: Smoke Training
+### Phase C: Smoke Training (10k steps, local CPU)
 
-**Status:** Not yet started
+**Status:** Complete
+
+**Config:** `experiments/configs/smoke_test_fake_timestep.yaml` — gamma_c=25, step_domain_fraction=0.1, rl_iterations=10, budget=30, icase=1, A2C, 10k timesteps.
+
+**Results directory:** `results/smoke_test_fake_timestep_v3/`
+
+**Environment stability:** PASS. 353 episodes completed, no crashes, no NaN values, no dimension mismatches. 119 steps/sec on CPU.
+
+**Reward range:** All episodes in [-1300, -1050] range. Dominated by -1000 budget-exceeded penalty. Per-step rewards are ~-5 to -10 (resource penalty from aggressive refinement).
+
+**Learning signal:** No upward trend in 10k steps. Consistent with session5 baseline which also showed negative rewards through ~25k steps. Entropy collapsed toward zero — agent committed to refine-heavy policy before learning budget restraint.
+
+**Termination:** 100% budget-exceeded. Zero episodes reached max_episode_steps. Agent refines aggressively (~60-80% refine actions) and hits budget wall in ~28 steps every episode.
+
+**Action distribution:** Refine-dominated throughout. No shift toward coarsen or do-nothing.
+
+**Key concern for Phase D:** Fake-timestep signal always rewards refinement (better mesh genuinely improves PDE advancement). Agent must learn that resource penalty outweighs accuracy gain for unnecessary refinement — harder credit assignment than steady-solve. May need higher gamma_c or reward shaping.
+
+**macOS note:** Apple Accelerate BLAS deadlocks when numpy parallelizes large Dhat @ q operations on highly-refined meshes. Workaround: `VECLIB_MAXIMUM_THREADS=1`. Not an issue on Borah (OpenBLAS/MKL).
 
 ### Phase D: Diagnostic Training
 
@@ -135,3 +154,4 @@ Phases A and B validate that the implementation is correct and the signal is phy
 | `tests/solvers/test_dg_advection_solver.py` | Modified -- added TestLSRK45Evolve class |
 | `tests/environments/test_dg_amr_env.py` | Modified -- updated MockSolver, added TestFakeTimestepDeltaU class |
 | `smoke_test_fake_timestep.py` | Created -- Phase A verification script |
+| `experiments/configs/smoke_test_fake_timestep.yaml` | Created -- Phase C smoke training config |

@@ -2,8 +2,8 @@
 
 **Project:** Systematic investigation of evaluation, observation space, and training improvements for 1D DRL-AMR  
 **Created:** February 12, 2025  
-**Last Updated:** March 1, 2025
-**Status:** Thread 1 — Experiment 1.2 substantially complete (burn-in validated, F6 confirmed, transferability IC visualization confirms Gaussian bias). Thread 4 — Experiment 4.1 Phases A+B complete (fake-timestep delta-u implemented and validated). Phase C (smoke training) next.
+**Last Updated:** March 3, 2025
+**Status:** Thread 1 — Experiment 1.2 substantially complete (burn-in validated, F6 confirmed, transferability IC visualization confirms Gaussian bias). Thread 4 — Experiment 4.1 Phases A+B+C complete (fake-timestep implemented, validated, smoke training passes). Phase D (diagnostic training) next.
 
 ---
 
@@ -221,7 +221,7 @@ This asks "does this mesh change improve the solver's ability to advance the PDE
 - `interactive_amr_testing.ipynb` → modified version for human-as-agent validation of new signal
 
 ### Experiment 4.1: Implement and Validate Fake-Timestep Delta-U
-**Status:** In Progress — Phase A (core implementation) and Phase B (interactive validation) complete. Phase C (smoke training) next.
+**Status:** In Progress — Phases A, B, C complete. Phase D (diagnostic training) next.
 **Experiment Log:** `research_logs/EXP_LOG_4_1_fake_timestep_delta_u.md`
 
 **Objective:** Implement the fake-timestep reward signal in the training environment, validate it produces physically meaningful gradients, and verify basic training works.
@@ -298,7 +298,7 @@ Quick-reference status of all experiments. Updated each session.
 | 2.2 | Alternative obs components | Not started | — | — |
 | 3.1 | Multi-IC training | Not started | — | — |
 | 3.2 | Progressive difficulty | Not started | — | — |
-| 4.1 | Fake-timestep delta-u | In Progress | Phase A+B complete: fake-timestep signal implemented, interactive validation confirms physically meaningful gradients (refine near gradients → positive delta_u, smooth regions → near-zero). All 49 tests pass. | `research_logs/EXP_LOG_4_1_fake_timestep_delta_u.md` |
+| 4.1 | Fake-timestep delta-u | In Progress | Phases A+B+C complete. Implementation validated, interactive testing confirms physical meaning. Smoke training (10k steps): environment stable, 353 episodes, no crashes. 100% budget-exceeded termination — agent refines aggressively, hasn't learned restraint at 10k steps (consistent with session5 early-training behavior). Key concern: fake-timestep always rewards refinement, credit assignment harder than steady-solve. macOS BLAS deadlock workaround: VECLIB_MAXIMUM_THREADS=1. | `research_logs/EXP_LOG_4_1_fake_timestep_delta_u.md` |
 | 4.2 | Full sweep (new signal) | Not started | — | — |
 
 ---
@@ -317,6 +317,7 @@ Quick-reference status of all experiments. Updated each session.
 | R.7 | 2025-02-22 | Stage 3 bug fixes + model selection (Exp 1.2) | Fixed 4 bugs in `key_models_analyzer.py` by diffing against archive version: (1) `_add_data_labels` restored b/g/r label generation from category column (was using nonexistent `model_label` column, wrong y-coordinate), (2) `_load_baseline_data` reverted from glob (R.6 change that caused 63+ legend entries) to single representative file, (3) burn-in compatibility guards for `initial_refinement`/`initial_elements` in 4 methods, (4) `create_parameter_table`/`_get_parameter_string_for_config` switched from NaN-prone tuple to `config_id` matching. Added baseline control to `manual_flagship` via `stage3_baselines` flag. Generated labeled Stage 3 plot. Selected models g8 and r3 for transferability IC burn-in visualization. | Baseline representation for cross-config plots still needs design decision (which single file to use). Deferred. `visualize_burnin.py` y-axis hardcoded for Gaussian — needs dynamic range for negative-valued ICs. |
 | R.8 | 2025-02-28 | Transferability visualization + Thread 4 planning | Extracted g5/g8 model params from aggregate CSVs. Fixed `visualize_burnin.py` y-axis (dynamic range from exact solution, replacing hardcoded Gaussian limits). Ran burn-in visualizations for g5/g8 on icase 10, 12, 16 — confirmed u>0 Gaussian bias in session4 models. Transferred session5_mexican_hat_200k models to clean repo (Borah full copy, Mac stripped via tarball). Ran session5 equivalents on icase 16 — partial improvement but still not fully resolving negative side lobes. Advisor meeting: decided to replace steady-solve with fake-timestep delta-u. Designed Thread 4 (Training Signal). Updated roadmap with Thread 4, revised thread ordering. | SSH rate limiting on Borah required tarball approach for Mac transfer. Session5 models confirm training signal is the fundamental limitation. |
 | R.9 | 2025-03-01 | Exp 4.1 Phase A+B: fake-timestep implementation + validation | Removed steady-solve from solver.reset(). Implemented _lsrk45_evolve() standalone function, MeshState namedtuple, _compute_fake_timestep_delta_u() method. Replaced steady-solve block in env.step() with fake-timestep comparison. Added 8 new tests (4 solver, 4 env). Updated MockSolver. Smoke test with real solver passes. Interactive validation (icase=10) confirms physically meaningful signal: refine near gradients → positive delta_u, smooth regions → near-zero. Created EXP_LOG_4_1. | Implementation followed 6-phase plan from R.8 design session. No changes needed to interactive notebook — it calls env.step() which now uses fake-timestep internally. |
+| R.10 | 2025-03-03 | Exp 4.1 Phase C: smoke training + macro planning | Phase C smoke training (10k steps, local CPU): environment stable, 353 episodes, no crashes/NaNs. 100% budget-exceeded termination — agent refines aggressively, hasn't learned restraint yet. Diagnosed and resolved Apple Accelerate BLAS deadlock (VECLIB_MAXIMUM_THREADS=1). Macro PhD strategy discussion: publication arc (1D methods paper + 2D SWE paper), action space architecture options (one-at-a-time vs mark-all vs threshold learning), scale-invariant obs space design. Created PhD Strategy Project handoff document. | BLAS deadlock caused process to sleep indefinitely at 0% CPU on macOS when mesh grew large from aggressive refinement. Not an issue on Borah. Phase D should investigate gamma_c sensitivity — fake-timestep always rewards refinement, so resource penalty must dominate for unnecessary refinements. |
 
 ---
 
