@@ -142,13 +142,223 @@
 
 ---
 
-## Pending Decisions
+### D-013: Switch from A2C to PPO for Stage 1+
+**Date:** 2026-03-18  
+**Status:** Final  
+**Source:** Phase 5 macro-planning session (2026-03-18), dual reward design discussion  
+**Decision:** Use PPO (Proximal Policy Optimization) instead of A2C (Advantage Actor-Critic) for all training from Stage 1 onward. Both are available in SB3 with the same policy class and Gym interface.  
+**Rationale:** The dual reward structure (D-003, D-007) delivers a large global retrospective signal at the round-terminal step that must propagate backward to mid-round element decisions. PPO is the better fit for four practical reasons: (1) GAE is active by default (gae_lambda=0.95 vs. A2C's 1.0), providing the temporal smoothing needed for backward credit assignment. (2) Sample reuse — 10 gradient epochs per rollout, critical when each environment step is expensive (U-queue rebuild, balance enforcement, periodic solver advance). (3) Clipped surrogate objective prevents destructive policy updates during tricky early training phases. (4) Longer default rollouts (n_steps=2048) capture multiple complete rounds per rollout. DynAMO also uses PPO (via RLLib). Foucart found A2C, PPO, and DQN performed similarly on the simpler steady-solve problem, but the dual reward's delayed signal structure favors PPO's design.  
+**Implications:** Replace A2C with PPO in all training scripts. Starting hyperparameters: lr=1e-4, n_steps=2048, batch_size=64, n_epochs=10, gamma=0.99, gae_lambda=0.95, ent_coef=0.01, clip_range=0.2. Network: 2×256 FCNN with tanh (matching DynAMO). No new dependencies — PPO is already in SB3.
+
+---
+
+### D-014: U-shaped priority queue replaces static descending-error queue
+**Date:** 2026-03-18  
+**Status:** Final (concept); pending detail resolution (metric definition, sub-round structure, termination condition)  
+**Source:** Phase 5 macro-planning session (2026-03-18), adaptation round mechanics discussion  
+**Decision:** Replace the static priority queue (descending error, processed once per round) with a U-shaped priority queue that is rebuilt from all active elements after every action. The U-shape captures urgency at both extremes: elements needing refinement (high error) and elements wasting resources (low error at high refinement level). No exclusion tracking is needed — the U-shape naturally handles bookkeeping after refinements, coarsenings, and cascades.  
+**Rationale:** Two fundamental problems with the static queue: (1) 2:1 balance cascades immediately invalidate the queue — entries reference elements that no longer exist, cascade-created children are missing, and priority ordering is stale. (2) A descending-error queue provides no entry point for coarsening — the agent never gets the opportunity to free budget by coarsening over-resolved elements. The U-shaped queue solves both problems and provides a natural termination signal (urgency drops below threshold at both ends).  
+**Implications:** Each sub-round within the adaptation round: rebuild U-queue → present element(s) → agent acts → execute + balance → repeat. Requires defining commensurable refine/coarsen urgency metrics, choosing one-element vs. two-element sub-round structure, selecting termination condition, and assessing computational cost of iterative rebuilding (fine for 1D; may need caching for 2D). See U_Shaped_Queue_Proposal_2026-03-18.md for full design and 7 open items.
+
+---
+
+### D-015: No barrier function initially; α-scaled barrier as fallback
+**Date:** 2026-03-18  
+**Status:** Revisitable (pending Stage 1B assessment)  
+**Source:** Phase 5 macro-planning session (2026-03-18), dual reward design discussion  
+**Decision:** Do not include Foucart's barrier function B(p) = √p/(1-p) in the initial Stage 1A implementation. The classification-based over-refinement penalty, hard budget constraint, and resource usage observation together replace the barrier's role. If Stage 1B shows the agent consistently exhausts the budget without learning conservation, reintroduce a barrier scaled by α (or a function of α) rather than a separate γ_c parameter.  
+**Rationale:** Foucart's barrier was needed because the steady-solve accuracy signal was always positive for refinement — the barrier was the only counterweight. In the classification-based reward, over-refinement is directly penalized and the hard budget prevents catastrophic overrun. Adding a barrier on top creates competing signals that may confuse early learning. The α-scaled fallback keeps the system to a single user-facing parameter controlling the full accuracy-cost tradeoff.  
+**Implications:** Stage 1A reward is purely classification-based (local + global) with no barrier term. If needed, the barrier is a Stage 1D ablation item. γ_c is eliminated as a hyperparameter.
+
+---
+
+### D-016: Threshold-based AMR as primary evaluation baseline (not old system)
+**Date:** 2026-03-18  
+**Status:** Final  
+**Source:** Phase 5 macro-planning session (2026-03-18)  
+**Decision:** The primary evaluation baseline for Stage 1B+ is conventional threshold-based AMR, not the old Masters thesis system (A2C + steady-solve + static queue). Internal ablations provide design validation.  
+**Rationale:** The old system's limitations are well-documented (steady-solve doesn't generalize, raw solution values cause spurious correlations, static queue can't handle cascades). Comparing against a known-broken baseline doesn't validate the new design. Threshold-based AMR is the conventional non-RL approach and the meaningful comparison: does the RL agent outperform a simple heuristic? The two-knob evaluation (α × budget) produces a 2D Pareto surface vs. threshold AMR's 1D curve.  
+**Implications:** Implement threshold-based AMR baseline using the same error indicator. Sweep threshold parameter to produce Pareto curve. Compare against RL agent's 2D Pareto surface.
+
+---
+
+### D-013: Switch from A2C to PPO for Stage 1+
+**Date:** 2026-03-18  
+**Status:** Final  
+**Source:** Phase 5 macro-planning session (2026-03-18), dual reward design discussion  
+**Decision:** Use PPO (Proximal Policy Optimization) instead of A2C (Advantage Actor-Critic) for all training from Stage 1 onward. Both are available in SB3 with the same policy class and Gym interface.  
+**Rationale:** The dual reward structure (D-003, D-007) delivers a large global retrospective signal at the round-terminal step that must propagate backward to mid-round element decisions. PPO is the better fit for four practical reasons: (1) GAE is active by default (gae_lambda=0.95 vs. A2C's 1.0), providing the temporal smoothing needed for backward credit assignment. (2) Sample reuse — 10 gradient epochs per rollout, critical when each environment step is expensive. (3) Clipped surrogate objective prevents destructive policy updates. (4) Longer default rollouts (n_steps=2048) capture multiple complete rounds per rollout. DynAMO also uses PPO (via RLLib).  
+**Implications:** Replace A2C with PPO in all training scripts. Starting hyperparameters: lr=1e-4, n_steps=2048, batch_size=64, n_epochs=10, gamma=0.99, gae_lambda=0.95, ent_coef=0.01. Network: 2×256 FCNN with tanh (matching DynAMO). No new dependencies.
+
+---
+
+### D-014: U-shaped priority queue replaces static descending-error queue
+**Date:** 2026-03-18  
+**Status:** Final (concept); pending detail resolution (metric definition, sub-round structure, termination condition)  
+**Source:** Phase 5 macro-planning session (2026-03-18), adaptation round mechanics discussion  
+**Decision:** Replace the static priority queue (descending error, processed once per round) with a U-shaped priority queue rebuilt from all active elements after every action. The U-shape captures urgency at both extremes: elements needing refinement (high error) and elements wasting resources (low error at high refinement level). No exclusion tracking needed — the U-shape naturally handles bookkeeping after refinements, coarsenings, and cascades.  
+**Rationale:** Two fundamental problems with the static queue: (1) 2:1 balance cascades immediately invalidate the queue — entries reference elements that no longer exist, cascade-created children are missing. (2) A descending-error queue provides no entry point for coarsening — the agent never gets the opportunity to free budget.  
+**Implications:** Each sub-round: rebuild U-queue → present element(s) → agent acts → execute + balance → repeat. Requires defining commensurable refine/coarsen urgency metrics, choosing sub-round structure, selecting termination condition. See U_Shaped_Queue_Proposal_2026-03-18.md.
+
+---
+
+### D-015: No barrier function initially; α-scaled barrier as fallback
+**Date:** 2026-03-18  
+**Status:** Revisitable (pending Stage 1B assessment)  
+**Source:** Phase 5 macro-planning session (2026-03-18), dual reward design discussion  
+**Decision:** Do not include Foucart's barrier function B(p) in the initial Stage 1A implementation. If needed, reintroduce a barrier scaled by α rather than a separate γ_c parameter.  
+**Rationale:** Classification-based over-refinement penalty, hard budget constraint, and resource usage observation together replace the barrier's role. Adding a barrier creates competing signals. The α-scaled fallback keeps the system to one user-facing parameter.  
+**Implications:** Stage 1A reward is purely classification-based. γ_c is eliminated as a hyperparameter. Barrier is a Stage 1D ablation item if needed.
+
+---
+
+### D-016: Threshold-based AMR as primary evaluation baseline
+**Date:** 2026-03-18  
+**Status:** Final  
+**Source:** Phase 5 macro-planning session (2026-03-18)  
+**Decision:** The primary evaluation baseline for Stage 1B+ is conventional threshold-based AMR, not the old Masters thesis system.  
+**Rationale:** The old system's limitations are well-documented. Comparing against a known-broken baseline doesn't validate the new design. Threshold-based AMR is the conventional non-RL approach and the meaningful comparison.  
+**Implications:** Implement threshold-based AMR baseline using the same error indicator. Sweep threshold to produce Pareto curve. Compare against RL agent's 2D Pareto surface (α × budget).
+
+---
+
+---
+
+### D-017: Multi-round single-pass replaces U-queue with iterative rebuilding
+**Date:** 2026-03-23  
+**Status:** Final  
+**Supersedes:** D-014 (U-shaped queue)  
+**Source:** Architecture revision session (2026-03-23) — realization that U-queue was making decisions for the agent  
+**Decision:** Replace the iterative U-queue rebuilding design with a multi-round single-pass architecture. Each round is a single pass over all active elements, sorted by distance from the neutral zone. The queue is a presentation ordering mechanism only — it does not filter, classify, or make allocation decisions. The agent sees every element and decides independently.  
+**Rationale:** The U-queue design classified elements into refine/coarsen bins and presented only the "most urgent" elements. This made the allocation decision for the agent, reducing it to rubber-stamping a heuristic — functionally equivalent to threshold-based AMR with extra overhead. The classification belongs in the reward function (teaching signal), not the queue construction (decision-maker).  
+**Implications:** U_Shaped_Queue_Proposal_2026-03-18.md is retired. The sub-round structure, commensurability problem (P-007), and termination condition question (P-009) are all eliminated by the simplification. See Stage_1_Architecture_Specification.md §5 for full design.
+
+---
+
+### D-018: Rounds per remesh interval = max_level
+**Date:** 2026-03-23  
+**Status:** Final  
+**Source:** Architecture revision session (2026-03-23)  
+**Decision:** The number of adaptation rounds per remesh interval is fixed at max_level (e.g., 3 rounds for max_level=3). Not adaptive, not a hyperparameter.  
+**Rationale:** Allows multi-level refinement within one remesh interval — round 1 does level 0→1, round 2 can do 1→2, round 3 can do 2→3. A final round of all do-nothings is a meaningful learning scenario (agent recognizes a well-adapted mesh). Fixed count eliminates the termination condition design question (P-009).  
+**Implications:** Episode length is deterministic: N_remesh × max_level × n_active_elements (approximately). No termination logic needed in the round loop.
+
+---
+
+### D-019: Every element visited every round
+**Date:** 2026-03-23  
+**Status:** Final  
+**Source:** Architecture revision session (2026-03-23)  
+**Decision:** Every active element is presented to the agent in every adaptation round. No filtering, no urgency cutoff, no "only present elements that need action."  
+**Rationale:** The agent needs to see the full mesh to learn anticipatory refinement, budget allocation, and cascade-aware reasoning. Filtering removes learning opportunities — the agent can never learn "this element looks fine but I should refine it anyway because a wave is approaching" if it only sees elements that already have high error.  
+**Implications:** Queue construction includes all active elements. Round length equals the number of active elements. Computational cost scales linearly with mesh size per round.
+
+---
+
+### D-020: Positive local reward for correct coarsening
+**Date:** 2026-03-23  
+**Status:** Final (scaling TBD — p_cr starting value set in D-023)  
+**Source:** Architecture revision session (2026-03-23), coarsening learning signal discussion  
+**Decision:** Add a positive local reward for correctly coarsening over-refined elements: +p_cr · |log₁₀(e/e_min)|. This is a departure from DynAMO's zero-is-optimal philosophy.  
+**Rationale:** In a budget-constrained system, correct coarsening frees resources for better allocation elsewhere. Without p_cr, both do-nothing and coarsen on an over-refined element receive r_local = 0. The only distinguishing signal comes from the global retrospective, many GAE steps away — insufficient for learning coarsening policy early in training. DynAMO has no budget, so there's no reason to prefer coarsening over inaction in their system.  
+**Implications:** New hyperparameter p_cr. Must monitor for perverse incentive (agent over-refines to earn coarsening rewards later — judged unlikely due to immediate p_or penalty on wrong refinement). Stage 1B ablation over p_cr values.
+
+---
+
+### D-021: Thresholds fixed once per remesh interval
+**Date:** 2026-03-23  
+**Status:** Final  
+**Source:** Architecture revision session (2026-03-23)  
+**Decision:** Classification thresholds e_max and e_min are computed from the pre-adaptation error distribution at the start of each remesh interval and held constant across all rounds within that interval.  
+**Rationale:** Stable classification target throughout the adaptation phase. Error indicators are recomputed each round (mesh changes), but the goal posts don't move. Matches DynAMO's threshold timing (Algorithm 3.1: reward uses thresholds from t_τ).  
+**Implications:** Thresholds stored at remesh interval start, used for both local and global rewards with the same values.
+
+---
+
+### D-022: Remesh interval T explicitly distinct from CFL timestep dt
+**Date:** 2026-03-23  
+**Status:** Final  
+**Source:** Architecture revision session (2026-03-23), clarification of March 18 proposal ambiguity  
+**Decision:** The remesh interval T (time between adaptation opportunities) is explicitly distinguished from the CFL-limited solver timestep dt. T >> dt. The solver takes multiple CFL sub-steps within each remesh interval. The existing `step_domain_fraction` parameter controls T.  
+**Rationale:** The March 18 proposals ambiguously said "solver advances one timestep." This conflated T with dt. For the 1D system: finest element Δx ≈ 0.0625 (level 3), CFL ≈ 0.1, dt ≈ 0.006. A reasonable T ≈ 0.05–0.1, meaning ~8–16 CFL sub-steps per remesh interval. Max-over-interval error tracking requires multiple sub-steps.  
+**Implications:** Solver advance method must iterate multiple dt steps per call. Max-over-interval tracking accumulates across all sub-steps.
+
+---
+
+### D-023: p_cr = 2.0 starting value
+**Date:** 2026-03-24  
+**Status:** Starting value; Stage 1B ablation to tune  
+**Source:** Architecture session (2026-03-24), UQ-R1 resolution  
+**Decision:** Set the coarsening reward weight p_cr = 2.0 as the starting value for Stage 1A implementation.  
+**Rationale:** Meaningfully positive but well below p_or (5) and p_ur (10). The asymmetry: correct coarsening is good but less critical than avoiding misclassifications. p_cr = 2 gives rewards of roughly +2 to +4 for moderately over-refined elements, versus penalties of -5 to -10 for wrong actions. A nudge, not a driver.  
+**Implications:** Stage 1B ablation sweep: p_cr ∈ {0, 1, 2, 5}.
+
+---
+
+### D-024: No positive refinement reward
+**Date:** 2026-03-24  
+**Status:** Final  
+**Source:** Architecture session (2026-03-24), UQ-R1 discussion  
+**Decision:** Do not add a positive local reward for correct refinement of under-refined elements. The reward for correct refinement remains 0 (DynAMO's zero-is-optimal philosophy, retained for refinement).  
+**Rationale:** Three reasons: (1) Refinement already has a strong learning signal — the global retrospective penalizes under-refined elements with p_ur = 10, the strongest penalty in the system. (2) The perverse incentive risk is worse for refinement — the agent could sandbag in round 1, then earn positive rewards by refining obviously under-refined elements in round 2. (3) The asymmetry is correct: coarsening needed the carrot because its signal was too weak and delayed; refinement's signal is already loud and clear.  
+**Implications:** Reward table retains asymmetry: positive reward only for correct coarsening (p_cr), zero for correct refinement.
+
+---
+
+### D-025: MaskablePPO action masking for structural constraints
+**Date:** 2026-03-24  
+**Status:** Final  
+**Source:** Architecture session (2026-03-24), valid coarsening discussion  
+**Decision:** Use SB3-contrib's MaskablePPO with action masking to handle structural constraints. Coarsen is masked when the sibling is not active or when coarsening would violate 2:1 balance. Refine is masked when at max_level. Do-nothing is always valid. Budget is NOT masked — the agent learns budget management through observation and reward.  
+**Rationale:** Replaces the old silent-remapping approach (coarsen → do-nothing when invalid) from the Masters thesis. Silent remapping wastes exploration budget and creates misaligned action-outcome signals. Action masking ensures every selected action actually executes, giving clean policy gradient signal. Not masking budget preserves the learning opportunity for budget-aware allocation.  
+**Implications:** Requires sb3-contrib dependency. Environment must implement `action_masks()` method. Mask computation is O(1) per element (tree lookup for sibling, parent neighbor check for balance).
+
+---
+
+### D-026: Observation space — 9 components (7 per-element + resource_usage + round_progress)
+**Date:** 2026-03-24  
+**Status:** Final for Stage 1A (propagation likelihood deferred to Stage 1C)  
+**Source:** Architecture session (2026-03-24), UQ-R3 resolution  
+**Decision:** The observation space has 9 scalar components: (1) α-normalized error, (2) left neighbor error, (3) right neighbor error, (4) normalized refinement level, (5) left neighbor level, (6) right neighbor level, (7) resource_usage, (8) round_progress = round_number/max_level. Component 9 (propagation likelihood) deferred to Stage 1C.  
+**Rationale:** The old 3-vector round context (Component 8 in March 18 proposal) was designed for the U-queue sub-round structure, now retired. A single scalar round_progress captures the essential information: the agent's strategy should differ across rounds (round 1 = coarse decisions, round 3 = fine-tuning). Resource_usage partially captures round progress but conflates it with budget state — the agent needs both signals independently.  
+**Implications:** Box(8,) observation space for SB3. Clean, minimal, no open design questions for Stage 1A.
+
+---
+
+### D-027: N_remesh = 4 (remesh intervals per episode)
+**Date:** 2026-03-24  
+**Status:** Starting value; revisitable in Stage 1B  
+**Source:** Architecture session (2026-03-24), UQ-R2 resolution  
+**Decision:** Each episode consists of 4 remesh intervals, matching DynAMO's episode length.  
+**Rationale:** With max_level=3 rounds per interval and ~15 active elements per round, this gives ~180 agent decisions per episode — reasonable for PPO. Long enough for GAE to propagate global rewards backward, short enough to avoid excessive variance.  
+**Implications:** Stage 1B ablation sweep: N_remesh ∈ {2, 4, 8}.
+
+---
+
+### D-028: Presentation ordering — priority magnitude, no interleaving
+**Date:** 2026-03-24  
+**Status:** Final  
+**Source:** Architecture session (2026-03-24), UQ-R4 resolution  
+**Decision:** Elements are sorted by distance from the neutral zone (log-scaled, matching reward penalty scaling), descending. No interleaving between refine and coarsen candidates — a single unified ordering by priority magnitude. Neutral elements sort to the end.  
+**Rationale:** An element 100× above e_max and one 100× below e_min are equally "far from neutral" and equally urgent. Interleaving would impose an artificial alternation that doesn't reflect actual urgency. The multi-round structure handles budget-sequencing naturally — if the agent skips a refinement due to budget in round 1, it gets another shot in round 2 after coarsening has freed resources.  
+**Implications:** Simple sort, no complex interleaving logic. Low-stakes design choice since all elements are visited regardless.
+
+---
+
+## Pending Decisions (Updated 2026-03-24)
 
 | ID | Topic | Blocking | Target Resolution |
 |----|-------|----------|-------------------|
-| P-001 | Multi-level β and penalty scaling | Stage 1A design | Stage 1D ablation — see UQ-4 |
-| P-002 | λ_local weighting for dual reward | Stage 1A implementation | Stage 1B ablation |
-| P-003 | Episode length (rounds per episode) | Stage 1A implementation | Start with 4 (DynAMO default), ablate in Stage 1D |
-| P-004 | Error indicator choice for 1D | Stage 1A implementation | Start with boundary jumps, test spectral decay in Stage 1D |
+| P-001 | Multi-level β and penalty scaling | Stage 1D ablation | Start simple, add complexity if needed — see UQ-4 |
+| P-002 | λ_local weighting for dual reward | Stage 1B ablation | Start with 0.1 (D-023 session) |
+| P-003 | Episode length (N_remesh) | Stage 1B ablation | Start with 4 (D-027), ablate {2, 4, 8} |
+| P-004 | Error indicator choice for 1D | Stage 1D ablation | Start with boundary jumps, test spectral decay later |
 | P-005 | Publication scope revision per D-006 | Next advisor meeting | Macro session after advisor meeting |
 | P-006 | Restaging of PhD plan per D-006 | Next advisor meeting | First macro-planning session |
+| P-011 | Action space design (ternary vs. multi-level) | Stage 1D ablation | Start with ternary (D-025) |
+
+**Retired pending decisions:**
+- ~~P-007~~ (U-queue coarsen urgency metric) — eliminated by D-017
+- ~~P-008~~ (U-queue sub-round structure) — eliminated by D-017
+- ~~P-009~~ (U-queue termination condition) — resolved by D-018
+- ~~P-010~~ (U-queue round context observation) — resolved by D-026

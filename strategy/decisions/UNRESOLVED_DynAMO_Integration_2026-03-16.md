@@ -23,6 +23,9 @@ The tension between α saying "30 elements need refinement" and the budget sayin
 
 **Priority:** Medium — strengthens framing, doesn't change implementation
 
+**Closure (2026-03-24):** Resolved. The two-knob evaluation (α × budget) is explicitly specified in Stage_1_Architecture_Specification.md §13.1 and listed as a key differentiator from DynAMO throughout the architecture documents. The PhD proposal framing update is tracked as P-005/P-006 for the next advisor meeting.  
+**Status: Closed — incorporated into Stage 1 spec**
+
 ---
 
 ## UQ-2: Max-Over-Interval Error (DynAMO Eq. 22) Not Incorporated
@@ -46,6 +49,9 @@ Track the maximum error each element experiences across all solver sub-timesteps
 **Implication for dual reward:** The local shaping reward (computed during the round, before solver advances) uses the current instantaneous error — this is correct and unchanged. Only the retrospective global reward needs the max-over-interval modification.
 
 **Priority:** High — directly affects reward quality and is easy to implement
+
+**Closure (2026-03-23):** Resolved by D-008 and D-022. Max-over-interval tracking is specified in Stage_1_Architecture_Specification.md §4.2. Implementation is Phase 1, Task 1.1 of the Stage 1 Implementation Roadmap. The distinction between remesh interval T and CFL timestep dt is explicitly documented.  
+**Status: Closed — specified and scheduled for implementation**
 
 ---
 
@@ -104,6 +110,9 @@ def step(self, action):
 
 **Priority:** High — must be resolved before implementation
 
+**Closure (2026-03-24):** Resolved by D-003, D-020, D-023, D-025, and the architecture revision (D-017). The reward delivery pattern is specified in Stage_1_Architecture_Specification.md §8.3. Key changes from the original UQ-3 recommendation: (1) MaskablePPO replaces standard PPO (D-025), (2) multi-round single-pass replaces U-queue iteration (D-017), (3) positive coarsening reward added (D-020), (4) global reward delivered on final step of final round within each remesh interval (not at round boundaries — there are multiple rounds per remesh interval). Implementation is Phase 2, Task 2.6–2.7 of the Stage 1 Implementation Roadmap.  
+**Status: Closed — specified and scheduled for implementation**
+
 ---
 
 ## UQ-4: β and Threshold Considerations for Multi-Level Refinement
@@ -126,6 +135,9 @@ def step(self, action):
 - Stage 1D ablations (line 233): add level-dependent penalty scaling as an ablation item
 
 **Priority:** Medium — important design question but can be resolved empirically in Stage 1D
+
+**Closure (2026-03-24):** Partially resolved. The "start simple" approach (option 3) is adopted: use DynAMO's binary classification applied to the current element state, regardless of how many levels off the element is. The budget constraint handles cost-aware allocation. Level-dependent penalty scaling is deferred to Stage 1D ablation (P-001). β = 1.2 (DynAMO default) is the starting value.  
+**Status: Partially closed — simple approach adopted, complexity deferred to Stage 1D**
 
 ---
 
@@ -166,17 +178,20 @@ where N_{e,i} is the number of interior edges in the element boundary.
 
 **Priority:** Low — informational update, no design impact
 
+**Closure (2026-03-24):** Already resolved in the original document. No further action needed.  
+**Status: Closed — informational, no design impact**
+
 ---
 
 ## Summary Table
 
-| ID | Topic | Priority | Affects | Resolution Stage |
-|----|-------|----------|---------|-----------------|
-| UQ-1 | Two-knob evaluation framing | Medium | Proposal framing, Stage 1B eval | Before Stage 1A |
-| UQ-2 | Max-over-interval error in reward | High | Stage 1A implementation | Before Stage 1A |
-| UQ-3 | SB3 dual reward mechanics | High | Stage 1A implementation | Before Stage 1A |
-| UQ-4 | Multi-level β and penalty scaling | Medium | Stage 1A design, Stage 1D ablation | Stage 1A (simple) + Stage 1D (ablate) |
-| UQ-5 | DynAMO error estimator confirmation | Low | Appendix B.1 update | Anytime |
+| ID | Topic | Priority | Status | Resolution |
+|----|-------|----------|--------|------------|
+| UQ-1 | Two-knob evaluation framing | Medium | **Closed** | Incorporated into Stage 1 spec; proposal framing update is P-005/P-006 |
+| UQ-2 | Max-over-interval error in reward | High | **Closed** | D-008, D-022; Phase 1 Task 1.1 |
+| UQ-3 | SB3 dual reward mechanics | High | **Closed** | D-003, D-017, D-020, D-025; Phase 2 Tasks 2.6–2.7 |
+| UQ-4 | Multi-level β and penalty scaling | Medium | **Partially closed** | Simple approach adopted; Stage 1D ablation for complexity (P-001) |
+| UQ-5 | DynAMO error estimator confirmation | Low | **Closed** | Informational — no design impact |
 
 ---
 

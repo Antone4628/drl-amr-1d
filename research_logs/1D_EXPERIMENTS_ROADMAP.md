@@ -18,6 +18,25 @@
 
 ---
 
+---
+
+## Retirement Notice (2026-03-24)
+
+**Thread 1 (Evaluation Protocol):** Complete. Burn-in initialization validated. Key findings (F1–F6) documented.
+
+**Threads 2, 3, and 4 are superseded** by the Stage 1 architecture redesign. The strategic pivot from the old A2C + steady-solve architecture to the multi-round sequential architecture with dual reward, α-normalization, and MaskablePPO makes these threads obsolete:
+
+- **Thread 2 (Observation Space):** Superseded by the new 9-component observation design (D-026) in the Stage 1 Architecture Specification. The α-normalized error, neighbor levels, resource usage, and round progress components replace the old raw-jump observation.
+- **Thread 3 (Curriculum Learning):** Multi-IC training is incorporated directly into Stage 1A as the default (random IC sampling per episode). Curriculum extensions (velocity variation, progressive difficulty) are planned for Stage 1C.
+- **Thread 4 (Training Signal):** Superseded by the dual reward structure (D-003, D-020) — classification-based local shaping + global retrospective with max-over-interval error. The fake-timestep delta-u approach (Thread 4) was abandoned after training failure (F10), and the DynAMO-inspired classification reward is the replacement.
+
+**New roadmap:** `research_logs/STAGE_1_IMPLEMENTATION_ROADMAP.md`  
+**Architecture spec:** `strategy/proposals/Stage_1_Architecture_Specification.md`
+
+This document is retained as historical record. Thread 1 findings (especially F1–F6) remain relevant reference material for the new architecture. Do not modify content below this notice.
+
+---
+
 ## Overview
 
 ### Motivation
