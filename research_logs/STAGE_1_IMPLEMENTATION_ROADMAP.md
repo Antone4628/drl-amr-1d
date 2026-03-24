@@ -32,13 +32,13 @@ This roadmap covers the implementation of Stage 1A (core architecture build) thr
 
 ## Branching and Repo Strategy
 
-**Branch:** `feature/stage1-architecture` from `main`  
+**Branch:** `feature/multiround-architecture` from `master`  
 **Merge criterion:** Stage 1A success criterion met (Phase 5 complete)
 
 **New files** for the new system:
-- `numerical/environments/dg_amr_env_stage1.py` — new Gym environment
-- `experiments/train_stage1.py` — new training script
-- `analysis/stage1/` — new evaluation and analysis pipeline
+- `numerical/environments/dg_amr_env_multiround.py` — new Gym environment
+- `experiments/train_multiround.py` — new training script
+- `analysis/multiround/` — new evaluation and analysis pipeline
 - `research_logs/STAGE_1_IMPLEMENTATION_ROADMAP.md` — this roadmap
 - `research_logs/EXP_LOG_S1_*.md` — Stage 1 experiment logs
 
@@ -66,8 +66,8 @@ Agent trains without divergence on multi-IC pool and produces meshes that outper
 **Estimated effort:** 1 session
 
 **Tasks:**
-- [ ] Create branch `feature/stage1-architecture` from `main`
-- [ ] Create directory structure: `analysis/stage1/`, experiment log files
+- [ ] Create branch `feature/multiround-architecture` from `master`
+- [ ] Create directory structure: `analysis/multiround/`, experiment log files
 - [ ] Add `sb3-contrib` to `requirements.txt` (for MaskablePPO)
 - [ ] Verify `sb3-contrib` + `maskable-ppo` installs in `rl-amr` conda env on both Mac and Borah
 - [ ] Create empty skeleton files for new environment and training script
@@ -128,11 +128,11 @@ Factor out the error indicator computation (boundary jump magnitude) into a stan
 **Status:** Not Started  
 **Estimated effort:** 3–4 sessions (largest phase)
 
-This is the core implementation — `numerical/environments/dg_amr_env_stage1.py`. Implements the full architecture from the spec (§2–§9).
+This is the core implementation — `numerical/environments/dg_amr_env_multiround.py`. Implements the full architecture from the spec (§2–§9).
 
 **Task 2.1: Environment skeleton and episode structure**
 
-- [ ] Create `DGAMREnvStage1(gymnasium.Env)` class
+- [ ] Create `DGAMREnvMultiround(gymnasium.Env)` class
 - [ ] Implement `__init__()`: solver initialization, observation/action space definitions, parameter storage (α, β, p_ur, p_or, p_cr, λ, N_remesh, max_level, element_budget)
 - [ ] Implement `reset()`: random IC sampling from pool, solver reinitialization, initial error computation, threshold computation, return initial observation
 - [ ] Implement episode state tracking: remesh_step counter, round counter, element queue position
@@ -215,7 +215,7 @@ This is the core implementation — `numerical/environments/dg_amr_env_stage1.py
 
 **Task 3.1: Training script**
 
-- [ ] Create `experiments/train_stage1.py`
+- [ ] Create `experiments/train_multiround.py`
 - [ ] MaskablePPO setup from sb3-contrib with environment
 - [ ] Hyperparameters from spec §10.1: lr=3e-4, gamma=0.99, gae_lambda=0.95, n_steps ≥ 180 (one full episode)
 - [ ] Network architecture: 2×256 FCNN (matching DynAMO)
@@ -322,7 +322,7 @@ Implement the conventional threshold-based AMR baseline (D-016) that serves as t
 - [ ] What do the training diagnostics reveal about learning dynamics?
 - [ ] What needs to change for Stage 1B? (hyperparameter ranges, additional diagnostics, environment bugs)
 - [ ] Write Stage 1A experiment log with findings
-- [ ] Merge `feature/stage1-architecture` to `main` if success criterion met
+- [ ] Merge `feature/multiround-architecture` to `master` if success criterion met
 
 **Depends on:** Phases 2, 3, 4  
 **Blocks:** Stage 1B
