@@ -2,8 +2,8 @@
 
 **Project:** DRL-AMR Stage 1 — Multi-Round Sequential Architecture  
 **Created:** 2026-03-24  
-**Last Updated:** 2026-03-24  
-**Status:** Phase 0 — not yet started  
+**Last Updated:** 2026-03-25 (Phase 1 substantially complete)  
+**Status:** Phase 1 — Tasks 1.2 and 1.3 complete; Task 1.1 absorbed into Phase 2  
 **Authoritative Spec:** `strategy/proposals/Stage_1_Architecture_Specification.md`
 
 ---
@@ -42,9 +42,14 @@ This roadmap covers the implementation of Stage 1A (core architecture build) thr
 - `research_logs/STAGE_1_IMPLEMENTATION_ROADMAP.md` — this roadmap
 - `research_logs/EXP_LOG_S1_*.md` — Stage 1 experiment logs
 
+**New files** added during Phase 1:
+- `numerical/solvers/dg_advection_solver_multiround.py` — solver copy for multiround architecture
+- `numerical/solvers/error_indicators.py` — standalone error indicator, threshold, and normalization utilities
+- `tests/amr/balance_test.py` — balance enforcement exploration script
+
 **Modified files** (shared infrastructure):
-- `numerical/solvers/dg_advection_solver.py` — max-over-interval tracking, balance hooks
-- `numerical/amr/adapt.py` — 2:1 balance enforcement modifications (if needed)
+- `numerical/solvers/dg_advection_solver.py` — ~~max-over-interval tracking, balance hooks~~ no modifications needed (Task 1.1 absorbed into environment)
+- `numerical/amr/adapt.py` — no modifications needed (balance works as-is; environment handles cascade tracking)
 
 **Old files left in place** (not deleted, not moved):
 - `numerical/environments/dg_amr_env.py` — reference for implementation patterns
@@ -62,7 +67,7 @@ Agent trains without divergence on multi-IC pool and produces meshes that outper
 ---
 
 ### Phase 0: Repository Setup
-**Status:** Not Started  
+**Status:** Complete (2026-03-24)  
 **Estimated effort:** 1 session
 
 **Tasks:**
@@ -84,40 +89,71 @@ Agent trains without divergence on multi-IC pool and produces meshes that outper
 ---
 
 ### Phase 1: Solver Modifications
-**Status:** Not Started  
-**Estimated effort:** 1–2 sessions
+**Status:** Substantially Complete (2026-03-25)  
+**Estimated effort:** 1–2 sessions  
+**Actual effort:** 1 session (Tasks 1.2 and 1.3 complete; Task 1.1 absorbed into Phase 2)
 
 The DG solver needs two modifications to support the new architecture.
 
 **Task 1.1: Max-over-interval error tracking**
 
-Add infrastructure to track the maximum error each element experiences across all solver sub-steps within a remesh interval (D-008, Architecture Spec §4.2).
+**Status: Absorbed into Phase 2 (environment logic, not solver logic).**
 
-- [ ] Add `track_max_error` flag to solver's time-stepping method
-- [ ] Add per-element max-error accumulator array (reset at remesh interval start)
-- [ ] At each RK sub-step, compute element boundary jump errors and update accumulator: `max_error[k] = max(max_error[k], e_k)`
-- [ ] Add method to retrieve max-over-interval errors and reset accumulator
-- [ ] Test: run solver for multiple sub-steps, verify max-over-interval ≥ instantaneous at each sub-step
-- [ ] Test: for a propagating wave, verify max-over-interval captures the transient peak as the wave passes through an element
+Original plan was to add accumulator inside the solver's `step()` method. Upon analysis, the max-over-interval tracking belongs in the environment, not the solver. The environment calls `step()` repeatedly during a remesh interval and updates its own accumulator between calls using `compute_element_errors()` from `error_indicators.py` (Task 1.3). The solver stays clean — no modifications needed.
+
+The accumulator pattern in the environment will be:
+```
+# After each step() within a remesh interval:
+current_errors = compute_element_errors(solver)
+self.max_interval_errors = np.maximum(self.max_interval_errors, current_errors)
+```
+
+~~Original subtasks (superseded):~~
+- ~~Add `track_max_error` flag to solver's time-stepping method~~
+- ~~Add per-element max-error accumulator array~~
+- ~~At each RK sub-step, compute element boundary jump errors and update accumulator~~
+- ~~Add method to retrieve max-over-interval errors and reset accumulator~~
+- Deferred to Phase 2: Test max-over-interval captures transient peaks during wave propagation
 
 **Task 1.2: 2:1 balance enforcement review**
 
 The current codebase has `balance=False` in evaluation. Stage 1 requires `balance=True` with cascade handling.
 
-- [ ] Review `adapt.py` `enforce_balance()` and `check_balance()` — understand current implementation
-- [ ] Test: enable balance, refine a single element, verify cascades propagate correctly
-- [ ] Test: coarsen an element near a level boundary, verify balance is maintained
-- [ ] Determine if `adapt_mesh` with `balance=True` handles the cascade-consumed-elements bookkeeping we need, or if the environment needs to track this separately
-- [ ] Document any interface gaps for the environment to handle
+- [x] Review `adapt.py` `enforce_balance()` and `check_balance()` — understand current implementation
+- [x] Test: enable balance, refine a single element, verify cascades propagate correctly
+- [x] Test: coarsen an element near a level boundary, verify balance is maintained
+- [x] Determine if `adapt_mesh` with `balance=True` handles the cascade-consumed-elements bookkeeping we need, or if the environment needs to track this separately
+- [x] Document any interface gaps for the environment to handle
+
+**Findings (2026-03-25) — see `tests/amr/balance_test.py` for test script:**
+
+1. **Refinement cascades work correctly.** `enforce_balance()` identifies the coarser neighbor and refines it. Each cascade adds exactly 2 elements (one parent splits into two children). Cascades iterate until balanced (up to max_level iterations).
+
+2. **Cascade detection:** The environment can detect cascade-created elements by diffing `solver.active` before and after `balance_mesh()`. This is reliable.
+
+3. **Coarsening-induced violations are fully undone by `enforce_balance()`.** Coarsening a sibling pair whose parent would violate 2:1 balance causes `enforce_balance` to immediately re-refine the parent back into the same children — a complete no-op. This confirms D-025: **action masking must prevent balance-violating coarsening** rather than relying on post-hoc enforcement.
+
+4. **`check_balance()` limitation:** Only checks `np.abs(np.diff(levels)) <= 1` on adjacent active elements. Does not check periodic wrap-around (first vs last element). May need to be extended or supplemented in the environment for periodic domains.
+
+5. **Action masking coarsen check:** Coarsen should be masked if: `any(abs((current_level - 1) - neighbor_level) > 1)` for the would-be parent's neighbors. This prevents the wasted coarsen-then-undo cycle.
+
+6. **Balance enforcement after refinement is still needed.** The agent's refine action can create violations that `enforce_balance()` must fix. The environment should: (a) execute refine, (b) call `balance_mesh()`, (c) diff active lists to find cascade-consumed elements, (d) skip those elements in the current round's queue.
 
 **Task 1.3: Error indicator computation**
 
 Factor out the error indicator computation (boundary jump magnitude) into a standalone utility that both the environment and evaluation code can call.
 
-- [ ] Create `numerical/solvers/error_indicators.py` (or add to utils.py)
-- [ ] Function: `compute_element_errors(solver) → array of per-element error indicators`
-- [ ] Function: `compute_alpha_thresholds(errors, alpha, beta) → (e_max, e_min)`
+- [x] Create `numerical/solvers/error_indicators.py`
+- [x] Function: `compute_element_errors(solver) → array of per-element error indicators`
+- [x] Function: `compute_alpha_thresholds(errors, alpha, beta) → (e_max, e_min)`
+- [x] Function: `compute_normalized_error(e_k, alpha, e_inf) → float` (for observation construction)
+- [x] Helper: `_find_neighbor_index(solver, active_idx, direction) → int` (shared neighbor lookup)
 - [ ] Test: verify against existing `_get_element_boundary_jumps()` in `model_marker_evaluation.py`
+
+**Notes (2026-03-25):**
+- All parameters (alpha, beta) are required function arguments with no defaults — DynAMO starting values live in config only (supports Stage 1B parameter sweeps)
+- `_find_neighbor_index` helper handles periodic wrapping and will be reused by the environment for observation construction
+- Verification test deferred to Phase 2 integration testing
 
 **Depends on:** Phase 0  
 **Blocks:** Phase 2 (environment needs solver modifications)
@@ -382,9 +418,9 @@ Systematic ablation sweeps. Each ablation is a separate experiment log.
 
 | ID | Name | Phase | Status | Key Finding | Log File |
 |----|------|-------|--------|-------------|----------|
-| S1-0.1 | Repo setup and dependency validation | 0 | Not started | — | — |
-| S1-1.1 | Solver max-over-interval tracking | 1 | Not started | — | — |
-| S1-1.2 | 2:1 balance enforcement validation | 1 | Not started | — | — |
+| S1-0.1 | Repo setup and dependency validation | 0 | Complete | sb3-contrib installed, multiround naming adopted | — |
+| S1-1.1 | Solver max-over-interval tracking | 1 | Absorbed into Phase 2 | Accumulator belongs in environment, not solver | — |
+| S1-1.2 | 2:1 balance enforcement validation | 1 | Complete | Cascades work; coarsen violations undone by enforce_balance; action masking confirmed | — |
 | S1-2.1 | New environment implementation | 2 | Not started | — | — |
 | S1-3.1 | Training infrastructure and smoke test | 3 | Not started | — | — |
 | S1-4.1 | Threshold AMR baseline | 4 | Not started | — | — |
@@ -396,7 +432,7 @@ Systematic ablation sweeps. Each ablation is a separate experiment log.
 
 | Session | Date | Focus | Completed Tasks | Notes |
 |---------|------|-------|-----------------|-------|
-| — | — | — | — | No implementation sessions yet |
+| 1 | 2026-03-25 | Phase 0 + Phase 1 | Phase 0 complete, Tasks 1.2/1.3 complete, Task 1.1 absorbed | Multiround naming adopted (was stage1). Balance test script created. error_indicators.py created. Solver copy created. |
 
 ---
 
