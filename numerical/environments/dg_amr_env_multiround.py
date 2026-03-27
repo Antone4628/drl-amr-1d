@@ -286,6 +286,292 @@ class DGAMREnvMultiround(gym.Env):
         elem_id = self.solver.active[active_idx]
         return int(self.solver.label_mat[elem_id - 1][4])
     
+    def _find_sibling(self, active_idx: int) -> Optional[int]:
+        """Find the sibling of an element in the active list.
+
+        Two elements are siblings if they share the same parent in the
+        binary tree (label_mat). Coarsening requires both siblings to be
+        active leaves.
+
+        Args:
+            active_idx: Index into solver.active (0-based).
+
+        Returns:
+            Index of the sibling in solver.active, or None if:
+            - Element is at level 0 (no parent)
+            - Sibling is not in the active list (has been refined)
+        """
+        elem_id = self.solver.active[active_idx]
+        parent_id = self.solver.label_mat[elem_id - 1][1]
+
+        # =====================================================================
+        # No parent means level 0 — cannot coarsen
+        # =====================================================================
+        if parent_id == 0:
+            return None
+
+        # =====================================================================
+        # Get both children of the parent — one is us, the other is sibling
+        # =====================================================================
+        child1, child2 = self.solver.label_mat[parent_id - 1][2:4]
+        sibling_id = child2 if elem_id == child1 else child1
+
+        # =====================================================================
+        # Check if sibling is active (i.e., a leaf in the tree)
+        # If sibling has been further refined, it won't be in solver.active
+        # =====================================================================
+        sibling_matches = np.where(self.solver.active == sibling_id)[0]
+        if len(sibling_matches) == 0:
+            return None
+
+        return int(sibling_matches[0])
+    
+    def _can_coarsen(self, active_idx: int) -> bool:
+        """Check whether coarsening is a valid action for the given element.
+
+        Coarsening requires (Architecture Spec §7.2):
+        1. Element is not at level 0 (has a parent)
+        2. Sibling is active (a leaf in the tree)
+        3. Sibling was not created by a balance cascade this round
+        4. Post-coarsening mesh would satisfy 2:1 balance
+           (parent's level vs both external neighbors)
+
+        The balance pre-check (condition 4) prevents coarsening that
+        enforce_balance would immediately undo — as confirmed by the
+        coarsening-induced violation test in balance_test.py.
+
+        Args:
+            active_idx: Index into solver.active (0-based).
+
+        Returns:
+            True if coarsening is valid, False otherwise.
+        """
+        # =====================================================================
+        # Condition 1-2: Sibling must exist and be active
+        # _find_sibling returns None if level 0 or sibling not in active list
+        # =====================================================================
+        sib_idx = self._find_sibling(active_idx)
+        if sib_idx is None:
+            self._log(2, f"    Coarsen blocked [idx={active_idx}]: no active sibling")
+            return False
+
+        # =====================================================================
+        # Condition 3: Sibling must not be a cascade-created element
+        # Cascade elements are tracked per-round in self.consumed_elements.
+        # Allowing coarsening of cascade elements would let the agent undo
+        # balance enforcement, defeating the purpose of action masking.
+        # =====================================================================
+        sibling_id = self.solver.active[sib_idx]
+        if sibling_id in self.consumed_elements:
+            self._log(2, f"    Coarsen blocked [idx={active_idx}]: sibling {sibling_id} is cascade-created")
+            return False
+
+        # =====================================================================
+        # Condition 4: Post-coarsening 2:1 balance check
+        # After coarsening, the parent replaces both siblings at
+        # parent_level = current_level - 1. Check that both external
+        # neighbors (left of leftmost sibling, right of rightmost sibling)
+        # have levels within 1 of parent_level.
+        # =====================================================================
+        current_level = self._get_element_level(active_idx)
+        parent_level = current_level - 1
+
+        # Identify which sibling is left vs right in the active list
+        left_idx = min(active_idx, sib_idx)
+        right_idx = max(active_idx, sib_idx)
+
+        n_active = len(self.solver.active)
+
+        # Left external neighbor (periodic wrap-around)
+        left_neighbor_idx = (left_idx - 1) % n_active
+        # Right external neighbor (periodic wrap-around)
+        right_neighbor_idx = (right_idx + 1) % n_active
+
+        left_neighbor_level = self._get_element_level(left_neighbor_idx)
+        right_neighbor_level = self._get_element_level(right_neighbor_idx)
+
+        if abs(parent_level - left_neighbor_level) > 1:
+            self._log(2, f"    Coarsen blocked [idx={active_idx}]: "
+                         f"parent L{parent_level} vs left neighbor L{left_neighbor_level}")
+            return False
+
+        if abs(parent_level - right_neighbor_level) > 1:
+            self._log(2, f"    Coarsen blocked [idx={active_idx}]: "
+                         f"parent L{parent_level} vs right neighbor L{right_neighbor_level}")
+            return False
+
+        self._log(2, f"    Coarsen allowed [idx={active_idx}]: "
+                      f"parent L{parent_level}, neighbors L{left_neighbor_level}/L{right_neighbor_level}")
+        return True
+    
+    # =========================================================================
+    # Action Masking (MaskablePPO Interface)
+    # =========================================================================
+
+    def action_masks(self) -> np.ndarray:
+        """Return boolean mask of valid actions for the current element.
+
+        Called by MaskablePPO before action selection. The mask prevents
+        the agent from selecting structurally invalid actions (Architecture
+        Spec §7.2), but does NOT mask based on budget — the agent learns
+        budget management through observation and reward (D-025).
+
+        Action indices:
+            0 = coarsen
+            1 = do-nothing (always valid)
+            2 = refine
+
+        Masking rules:
+            - Coarsen: requires _can_coarsen() (sibling, no cascade, balance)
+            - Do-nothing: always valid
+            - Refine: blocked only at max_level
+
+        Returns:
+            np.ndarray of shape (3,), dtype bool. True = action allowed.
+        """
+        active_idx = self.current_element_idx
+        mask = np.array([False, True, False], dtype=bool)
+
+        # =====================================================================
+        # Coarsen mask (action 0)
+        # Full balance-aware check including cascade and neighbor levels
+        # =====================================================================
+        mask[0] = self._can_coarsen(active_idx)
+
+        # =====================================================================
+        # Refine mask (action 2)
+        # Only structural constraint: can't refine beyond max_level
+        # Budget is NOT masked — agent sees resource_usage in observation
+        # =====================================================================
+        current_level = self._get_element_level(active_idx)
+        mask[2] = current_level < self.solver.max_level
+
+        self._log(2, f"    Mask[idx={active_idx}]: coarsen={mask[0]} "
+                      f"hold={mask[1]} refine={mask[2]}")
+
+        return mask
+    
+    # =========================================================================
+    # Action Execution and Cascade Handling
+    # =========================================================================
+
+    def _detect_cascade_elements(
+        self, post_action_active: set, post_balance_active: set
+    ) -> Set[int]:
+        """Identify elements created by balance enforcement (cascades).
+
+        After the agent's action executes, balance enforcement may refine
+        additional elements to maintain 2:1 balance. These cascade-created
+        elements are tracked so the agent is not penalized for them and
+        cannot coarsen them within the same round (Architecture Spec §7.3).
+
+        Args:
+            post_action_active: Set of element IDs after agent's action,
+                before balance enforcement.
+            post_balance_active: Set of element IDs after balance enforcement.
+
+        Returns:
+            Set of element IDs that were created by cascade refinement.
+        """
+        cascade = post_balance_active - post_action_active
+        if cascade:
+            self._log(2, f"    Cascade created {len(cascade)} elements: {cascade}")
+        return cascade
+    
+    def _execute_action(self, active_idx: int, action: int) -> dict:
+        """Execute the agent's chosen action on the given element.
+
+        Applies the action (coarsen/hold/refine), then runs balance
+        enforcement separately to track cascade-created elements
+        (Architecture Spec §7.3).
+
+        The separation of action and balance is critical: it lets us
+        distinguish agent decisions from forced balance cascades for
+        reward attribution and action masking within the same round.
+
+        Args:
+            active_idx: Index into solver.active (0-based).
+            action: Action from the agent's policy.
+                0 = coarsen, 1 = do-nothing, 2 = refine.
+
+        Returns:
+            Dict with execution diagnostics:
+                - 'action_taken': str ('coarsen', 'hold', 'refine')
+                - 'cascade_elements': set of element IDs created by balance
+                - 'pre_n_active': element count before action
+                - 'post_n_active': element count after action + balance
+        """
+        # =====================================================================
+        # Map action index to mark value and label
+        # =====================================================================
+        action_map = {0: (-1, 'coarsen'), 1: (0, 'hold'), 2: (1, 'refine')}
+        mark_val, action_label = action_map[action]
+
+        pre_n_active = len(self.solver.active)
+        self._log(2, f"    Action: {action_label} on element "
+                      f"{self.solver.active[active_idx]} (idx={active_idx})")
+
+        result = {
+            'action_taken': action_label,
+            'cascade_elements': set(),
+            'pre_n_active': pre_n_active,
+            'post_n_active': pre_n_active,
+        }
+
+        # =====================================================================
+        # Do-nothing: no mesh changes needed
+        # =====================================================================
+        if action == 1:
+            self._log(2, f"    Hold — no mesh change")
+            return result
+
+        # =====================================================================
+        # Apply the agent's action WITHOUT balance enforcement
+        # adapt_mesh handles sibling marking for coarsening internally
+        # via _process_marks_override → _mark_coarsening_pair.
+        # element_budget=None: budget not enforced at solver level (D-025).
+        # update_dt=False: time step recomputed once before solver advance.
+        # balance=False: we handle balance separately for cascade tracking.
+        # =====================================================================
+        post_action_active_set = set(self.solver.active)  # snapshot before
+        self.solver.adapt_mesh(
+            marks_override={active_idx: mark_val},
+            element_budget=None,
+            update_dt=False,
+            balance=False,
+        )
+        post_action_active_set = set(self.solver.active)
+
+        self._log(2, f"    Post-action: {len(self.solver.active)} elements")
+
+        # =====================================================================
+        # Enforce 2:1 balance separately to track cascades
+        # balance_mesh returns True if it made changes but does NOT
+        # rebuild matrices — we must do that manually.
+        # =====================================================================
+        balanced = self.solver.balance_mesh(balance=True)
+        post_balance_active_set = set(self.solver.active)
+
+        if balanced:
+            # balance_mesh changed the mesh — rebuild operators
+            self.solver._update_matrices()
+            self.solver._update_forcing()
+            self._log(2, f"    Post-balance: {len(self.solver.active)} elements")
+
+        # =====================================================================
+        # Detect and record cascade-created elements
+        # These are excluded from coarsening eligibility this round
+        # =====================================================================
+        cascade = self._detect_cascade_elements(
+            post_action_active_set, post_balance_active_set
+        )
+        self.consumed_elements.update(cascade)
+
+        result['cascade_elements'] = cascade
+        result['post_n_active'] = len(self.solver.active)
+
+        return result
+    
     # =========================================================================
     # Logging
     # =========================================================================
