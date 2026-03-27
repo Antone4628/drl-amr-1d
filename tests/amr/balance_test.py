@@ -366,6 +366,10 @@ def main():
     # Run coarsening-induced violation test
     # =========================================================================
     coarsen_test()
+    # =========================================================================
+    # Run periodic boundary balance test
+    # =========================================================================
+    periodic_balance_test()
     
     # =========================================================================
     # Plot all snapshots
@@ -578,6 +582,106 @@ def coarsen_test():
     print("The key question was: does coarsening create violations that")
     print("enforce_balance fixes by undoing the coarsening?")
     print("If yes → action masking should prevent such coarsening (D-025).")
+
+def periodic_balance_test():
+    """Test that check_balance detects violations at periodic boundaries.
+    
+    Constructs a mesh where the first and last active elements differ by
+    2 refinement levels, which is only a violation if the periodic
+    wrap-around is checked. Verifies the fix to check_balance() that
+    adds the last-vs-first comparison.
+    
+    Pre-fix behavior: check_balance uses np.diff(levels) which only
+    compares adjacent pairs in the array — misses the wrap-around.
+    Post-fix behavior: check_balance also compares levels[-1] vs levels[0].
+    """
+    print("\n" + "="*60)
+    print("  PERIODIC BOUNDARY BALANCE TEST")
+    print("="*60)
+    
+    # =========================================================================
+    # Setup: 8 base elements, balance=False so we control everything
+    # =========================================================================
+    xelem = np.linspace(-1, 1, 9)
+    solver = DGAdvectionSolver(
+        nop=4, xelem=xelem, max_elements=64, max_level=3,
+        icase=1, balance=True, verbose=False
+    )
+    
+    print_mesh_state(solver, "Periodic Step 0: Base mesh (all L0)")
+    
+    # =========================================================================
+    # Step 1: Refine the LAST element (index 7, rightmost)
+    # Creates L1 at the right boundary, L0 at the left boundary.
+    # Across the periodic wrap: L1 vs L0 → balanced (diff = 1).
+    # =========================================================================
+    target_idx = len(solver.active) - 1
+    target_id = solver.active[target_idx]
+    print(f"\n>>> Refining last element (active_idx={target_idx}, elem ID={target_id})")
+    refine_element(solver, target_idx)
+    levels, balanced = print_mesh_state(solver, "Periodic Step 1: Last element refined to L1")
+    print(f"  Periodic boundary: levels[-1]={levels[-1]}, levels[0]={levels[0]}")
+    print(f"  check_balance says: {balanced}")
+    assert balanced, "ERROR: L1 vs L0 across boundary should be balanced!"
+    print("  ✓ Correctly identified as balanced (diff = 1)")
+    
+    # =========================================================================
+    # Step 2: Refine one of the L1 children at the right boundary to L2
+    # Now the rightmost active element is L2, leftmost is L0.
+    # Across the periodic wrap: L2 vs L0 → UNBALANCED (diff = 2).
+    # This is the case that the old check_balance missed.
+    # =========================================================================
+    levels = get_active_levels(solver.active, solver.label_mat)
+    # Find the last L1 element (rightmost in the active list)
+    last_l1_idx = None
+    for i in range(len(levels) - 1, -1, -1):
+        if levels[i] == 1:
+            last_l1_idx = i
+            break
+    
+    if last_l1_idx is None:
+        print("ERROR: No L1 element found at right boundary")
+        return
+    
+    target_id = solver.active[last_l1_idx]
+    print(f"\n>>> Refining rightmost L1 element (active_idx={last_l1_idx}, elem ID={target_id})")
+    refine_element(solver, last_l1_idx)
+    levels, balanced = print_mesh_state(solver, "Periodic Step 2: Rightmost L1 refined to L2 (pre-balance)")
+    
+    print(f"\n  --- CRITICAL CHECK ---")
+    print(f"  Periodic boundary: levels[-1]={levels[-1]}, levels[0]={levels[0]}")
+    print(f"  Interior diffs:    {list(np.abs(np.diff(levels)))}")
+    interior_ok = np.all(np.abs(np.diff(levels)) <= 1)
+    print(f"  Interior balanced: {interior_ok}")
+    print(f"  check_balance says: {balanced}")
+    
+    if interior_ok and not balanced:
+        print("  ✓ PASS: check_balance correctly catches periodic boundary violation!")
+        print("  ✓ Interior is fine but the wrap-around (L2 vs L0) is caught.")
+    elif interior_ok and balanced:
+        print("  ✗ FAIL: check_balance missed the periodic boundary violation!")
+        print("  ✗ The old np.diff-only bug is still present.")
+    else:
+        print(f"  Interior violation also present — periodic test inconclusive.")
+    
+    # =========================================================================
+    # Step 3: Enforce balance and verify it fixes the periodic violation
+    # =========================================================================
+    if not balanced:
+        print(f"\n>>> Enforcing balance to fix periodic violation...")
+        pre_bal = solver.active.copy()
+        solver.balance_mesh(balance=True)
+        bal_added, bal_removed = diff_active(pre_bal, solver.active)
+        levels, balanced = print_mesh_state(solver, "Periodic Step 3: After balance enforcement")
+        print(f"  Cascade-created elements: {bal_added}")
+        print(f"  Periodic boundary: levels[-1]={levels[-1]}, levels[0]={levels[0]}")
+        
+        if balanced:
+            print("  ✓ Balance enforcement fixed the periodic violation")
+        else:
+            print("  ✗ Balance enforcement did NOT fix the periodic violation")
+    
+    print(f"\nPeriodic balance test complete.")
 
 if __name__ == '__main__':
     main()

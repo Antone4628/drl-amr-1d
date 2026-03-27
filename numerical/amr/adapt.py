@@ -100,8 +100,7 @@ def mark(active_grid, label_mat, intma, q, criterion, threshold=0.5):
     return  marks
 
 
-
-def check_balance(active_grid, label_mat):
+def check_balance(active_grid, label_mat, periodic=True):
     """Check if mesh satisfies 2:1 balance constraint.
     
     A mesh is balanced if neighboring elements differ by at most one
@@ -110,15 +109,22 @@ def check_balance(active_grid, label_mat):
     Args:
         active_grid: Active element IDs (1-indexed), shape (n_active,).
         label_mat: Element relationships from forest(), shape (total_elements, 5).
+        periodic: If True, also check last-vs-first element (periodic BCs).
         
     Returns:
         True if mesh is balanced, False otherwise.
     """
     levels = get_active_levels(active_grid, label_mat)
-    balance_status = np.all(np.abs(np.diff(levels)) <= 1)
-    return balance_status
+    # Check all adjacent pairs (interior)
+    interior_balanced = np.all(np.abs(np.diff(levels)) <= 1)
+    # Check periodic wrap-around (last element vs first element)
+    if periodic:
+        periodic_balanced = abs(int(levels[-1]) - int(levels[0])) <= 1
+        return interior_balanced and periodic_balanced
+    return interior_balanced
 
-def balance_mark(active, label_mat):
+
+def balance_mark(active, label_mat, periodic=True):
     """Mark elements that need refinement to restore 2:1 balance.
     
     Identifies element pairs where the level difference exceeds 1 and
@@ -127,6 +133,7 @@ def balance_mark(active, label_mat):
     Args:
         active: Active element IDs (1-indexed), shape (n_active,).
         label_mat: Element relationships from forest(), shape (total_elements, 5).
+        periodic: If True, check last-vs-first element (periodic BCs).
         
     Returns:
         Refinement markers, shape (n_active,). 1 = needs refinement, 0 = ok.
@@ -139,24 +146,24 @@ def balance_mark(active, label_mat):
     balance_marks = np.zeros(n_active, dtype=int)
     levels = get_active_levels(active, label_mat)
 
-    for e in range(n_active):
-        # Compare this element's level to left neighbor (periodic: e-1 wraps)
+    # For non-periodic: start at 1 to skip wrap-around comparison
+    start = 0 if periodic else 1
+    for e in range(start, n_active):
+        # Compare this element's level to left neighbor (e-1 wraps for periodic)
         elem_level = levels[e]
         left_level = levels[e-1]
-        # Check level difference between elements
         level_difference = abs(elem_level - left_level)
 
         if level_difference > 1:
-            # Mark the coarser (lower level) element for refinement
             if elem_level > left_level:
-                balance_marks[e-1] = 1 # Left neighbor is coarser
+                balance_marks[e-1] = 1
             elif elem_level < left_level:
-                balance_marks[e] = 1 # Current element is coarser
+                balance_marks[e] = 1
 
     return balance_marks
 
 
-def enforce_balance(active, label_mat, grid, info_mat, nop, coord, PS1, PS2, PG1, PG2, ngl, xgl, qp, max_level):
+def enforce_balance(active, label_mat, grid, info_mat, nop, coord, PS1, PS2, PG1, PG2, ngl, xgl, qp, max_level, periodic=True):
     """Iteratively enforce 2:1 balance constraint on the mesh.
     
     Repeatedly marks and refines elements until no neighboring elements
@@ -191,13 +198,13 @@ def enforce_balance(active, label_mat, grid, info_mat, nop, coord, PS1, PS2, PG1
     """
     bal_ctr = 0
     while (bal_ctr <= max_level):
-        if check_balance(active, label_mat):
+        if check_balance(active, label_mat, periodic=periodic):
             bal_ctr = max_level + 1
 
         else:
 
 
-            bal_marks = balance_mark(active, label_mat)
+            bal_marks = balance_mark(active, label_mat, periodic=periodic)
             pre_active = active  
             pre_grid = grid
             pre_coord = coord

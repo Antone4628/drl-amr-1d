@@ -11,8 +11,8 @@ Episode structure (three nested loops):
                 └─ Element Visit (observe → decide → execute → reward)
 
 Key differences from DGAMREnv (dg_amr_env.py):
-    - Episode structure: N_remesh remesh intervals × max_level rounds × all elements
-    - Observation: 8 components (α-normalized errors, neighbor levels, resource/round)
+    - Episode structure: N_remesh remesh intervals x max_level rounds x all elements
+    - Observation: 8 components (alpha-normalized errors, neighbor levels, resource/round)
     - Reward: Dual — local shaping per step + global retrospective per interval
     - Action masking: MaskablePPO with 2:1 balance-aware coarsen masks
     - Element ordering: Priority-magnitude queue rebuilt each round
@@ -96,6 +96,7 @@ class DGAMREnvMultiround(gym.Env):
         step_domain_fraction: float = 0.05,
         initial_refinement_level: int = 0,
         ic_pool: Optional[List[int]] = None,
+        verbosity: int = 0,
     ):
         """Initialize the multi-round DRL-AMR environment.
 
@@ -175,6 +176,14 @@ class DGAMREnvMultiround(gym.Env):
         self.ic_pool = ic_pool if ic_pool is not None else [
             1, 10, 12, 13, 14, 15, 16
         ]
+
+        # =====================================================================
+        # Verbosity control
+        #   0 = silent (training)
+        #   1 = summary (episode-level events)
+        #   2 = detailed (step-level narrative for debugging/testing)
+        # =====================================================================
+        self.verbosity = verbosity
 
         # =====================================================================
         # Action space 
@@ -278,6 +287,20 @@ class DGAMREnvMultiround(gym.Env):
         return int(self.solver.label_mat[elem_id - 1][4])
     
     # =========================================================================
+    # Logging
+    # =========================================================================
+
+    def _log(self, level: int, msg: str) -> None:
+        """Print message if verbosity is at or above the given level.
+
+        Args:
+            level: Minimum verbosity required to print (1 = summary, 2 = detail).
+            msg: Message string to print.
+        """
+        if self.verbosity >= level:
+            print(msg)
+    
+    # =========================================================================
     # Element Queue Construction 
     # =========================================================================
     
@@ -292,7 +315,9 @@ class DGAMREnvMultiround(gym.Env):
 
         TODO: Replace with priority-magnitude sorting (Session 3, Task 2.5).
         """
-        return list(range(len(self.solver.active)))
+        queue = list(range(len(self.solver.active)))
+        self._log(2, f"  Queue built: {len(queue)} elements, order: {queue}")
+        return queue
     
     # =========================================================================
     # Observation Construction 
@@ -406,6 +431,10 @@ class DGAMREnvMultiround(gym.Env):
             round_progress,
         ], dtype=np.float32)
 
+        self._log(2, f"    Obs[idx={active_idx}]: err={obs[0]:.3f} L/R=[{obs[1]:.3f},{obs[2]:.3f}] "
+                      f"lvl={obs[3]:.2f} L/R=[{obs[4]:.2f},{obs[5]:.2f}] "
+                      f"res={obs[6]:.2f} rnd={obs[7]:.2f}")
+
         return obs
     
     # =========================================================================
@@ -445,6 +474,11 @@ class DGAMREnvMultiround(gym.Env):
         else:
             icase = int(self.np_random.choice(self.ic_pool))
 
+        self._log(1, f"\n{'='*60}")
+        self._log(1, f"  EPISODE {self._total_episodes + 1} START")
+        self._log(1, f"{'='*60}")
+        self._log(2, f"  IC selected: icase={icase}")
+
         # =====================================================================
         # Reset solver with selected IC and optional initial refinement
         # Default: 4 base elements at level 0. With initial_refinement_level=1,
@@ -477,6 +511,9 @@ class DGAMREnvMultiround(gym.Env):
             errors, self.alpha, self.beta
         )
 
+        self._log(2, f"  Initial elements: {len(self.solver.active)}")
+        self._log(2, f"  Thresholds: e_max={self.e_max:.6f}, e_min={self.e_min:.6f}")
+
         # =====================================================================
         # Initialize max-over-interval error accumulator (D-008)
         # Starts at zero; updated during solver advance phase between
@@ -505,6 +542,9 @@ class DGAMREnvMultiround(gym.Env):
         # Build observation for the first element in the queue
         # =====================================================================
         obs = self._build_observation(self.current_element_idx)
+
+        self._log(2, f"  Queue built: {len(self.queue)} elements")
+        self._log(2, f"  First element: active_idx={self.current_element_idx}")
 
         # =====================================================================
         # Construct info dict with episode initialization diagnostics
