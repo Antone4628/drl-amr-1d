@@ -2,8 +2,8 @@
 
 **Project:** DRL-AMR Stage 1 — Multi-Round Sequential Architecture  
 **Created:** 2026-03-24  
-**Last Updated:** 2026-03-25 (Phase 1 substantially complete)  
-**Status:** Phase 1 — Tasks 1.2 and 1.3 complete; Task 1.1 absorbed into Phase 2  
+**Last Updated:** 2026-03-27 (Phase 2 Tasks 2.1–2.2 complete)  
+**Status:** Phase 2 in progress — Tasks 2.1–2.2 complete; Tasks 2.3–2.8 not started  
 **Authoritative Spec:** `strategy/proposals/Stage_1_Architecture_Specification.md`
 
 ---
@@ -161,30 +161,39 @@ Factor out the error indicator computation (boundary jump magnitude) into a stan
 ---
 
 ### Phase 2: New Gym Environment
-**Status:** Not Started  
+**Status:** In Progress (Tasks 2.1–2.2 complete, 2026-03-27)  
 **Estimated effort:** 3–4 sessions (largest phase)
 
 This is the core implementation — `numerical/environments/dg_amr_env_multiround.py`. Implements the full architecture from the spec (§2–§9).
 
 **Task 2.1: Environment skeleton and episode structure**
 
-- [ ] Create `DGAMREnvMultiround(gymnasium.Env)` class
-- [ ] Implement `__init__()`: solver initialization, observation/action space definitions, parameter storage (α, β, p_ur, p_or, p_cr, λ, N_remesh, max_level, element_budget)
-- [ ] Implement `reset()`: random IC sampling from pool, solver reinitialization, initial error computation, threshold computation, return initial observation
-- [ ] Implement episode state tracking: remesh_step counter, round counter, element queue position
-- [ ] Define observation_space (Box, 8 components) and action_space (Discrete(3))
+- [x] Create `DGAMREnvMultiround(gymnasium.Env)` class
+- [x] Implement `__init__()`: solver initialization, observation/action space definitions, parameter storage (α, β, p_ur, p_or, p_cr, λ, N_remesh, max_level, element_budget)
+- [x] Implement `reset()`: random IC sampling from pool, solver reinitialization, initial error computation, threshold computation, return initial observation
+- [x] Implement episode state tracking: remesh_step counter, round counter, element queue position
+- [x] Define observation_space (Box, 8 components) and action_space (Discrete(3))
 
 **Task 2.2: Observation construction**
 
-- [ ] Implement `_build_observation(element_idx) → np.array(8,)`
-- [ ] Component 1: α-normalized log-error for current element
-- [ ] Components 2–3: same for left/right neighbors (with periodic wrapping)
-- [ ] Component 4: normalized refinement level (current_level / max_level)
-- [ ] Components 5–6: normalized left/right neighbor refinement levels
-- [ ] Component 7: resource_usage (len(active) / element_budget)
-- [ ] Component 8: round_progress (round_number / max_level)
-- [ ] Handle edge cases: zero error (clamp), single element, boundary wrapping
+- [x] Implement `_build_observation(element_idx) → np.array(8,)`
+- [x] Component 1: α-normalized log-error for current element
+- [x] Components 2–3: same for left/right neighbors (with periodic wrapping)
+- [x] Component 4: normalized refinement level (current_level / max_level)
+- [x] Components 5–6: normalized left/right neighbor refinement levels
+- [x] Component 7: resource_usage (len(active) / element_budget)
+- [x] Component 8: round_progress (round_number / max_level)
+- [x] Handle edge cases: zero error (clamp), single element, boundary wrapping
 - [ ] Test: construct observations for a known mesh state, verify values against hand calculations
+
+**Notes (2026-03-27) — Implementation decisions made during Tasks 2.1–2.2:**
+
+1. **Round numbering is 1-indexed (1 to max_level).** `round_progress = round_number / max_level` reaches 1.0 on the final round. Affects `_advance_queue()` round completion check: `round_number > max_level`.
+2. **`initial_refinement_level` parameter (Option C).** Default in `__init__` (default=0, base mesh) with per-episode override via `options['refinement_level']` in `reset()`. Enables Stage 1B ablation comparing level-0 vs level-1 starts.
+3. **Matrix rebuilds not deferred for now.** `adapt_mesh()` does full `_update_matrices()` after each action. Negligible for 1D ~15 elements. Revisit if Stage 1B profiling warrants adding `update_operators=False` flag to solver copy.
+4. **`adapt_mesh` called with `element_budget=None`.** Budget not enforced at solver level. Agent sees over-budget consequences through `resource_usage > 1.0`, not silent cancellation.
+5. **IC sampling uses Gymnasium's `self.np_random`.** Makes IC selection reproducible when seed passed to `reset()`. Uses `self.np_random.choice(self.ic_pool)`.
+6. **`_build_queue()` stubbed with natural order.** Returns `list(range(len(solver.active)))`. Real priority-magnitude sorting replaces this in Task 2.5.
 
 **Task 2.3: Action masking**
 
@@ -421,7 +430,7 @@ Systematic ablation sweeps. Each ablation is a separate experiment log.
 | S1-0.1 | Repo setup and dependency validation | 0 | Complete | sb3-contrib installed, multiround naming adopted | — |
 | S1-1.1 | Solver max-over-interval tracking | 1 | Absorbed into Phase 2 | Accumulator belongs in environment, not solver | — |
 | S1-1.2 | 2:1 balance enforcement validation | 1 | Complete | Cascades work; coarsen violations undone by enforce_balance; action masking confirmed | — |
-| S1-2.1 | New environment implementation | 2 | Not started | — | — |
+| S1-2.1 | New environment implementation | 2 | Tasks 2.1–2.2 complete | __init__, reset, _build_observation, _get_element_level implemented; _build_queue stubbed | — |
 | S1-3.1 | Training infrastructure and smoke test | 3 | Not started | — | — |
 | S1-4.1 | Threshold AMR baseline | 4 | Not started | — | — |
 | S1-5.1 | Integration test and first training | 5 | Not started | — | — |
@@ -433,6 +442,7 @@ Systematic ablation sweeps. Each ablation is a separate experiment log.
 | Session | Date | Focus | Completed Tasks | Notes |
 |---------|------|-------|-----------------|-------|
 | 1 | 2026-03-25 | Phase 0 + Phase 1 | Phase 0 complete, Tasks 1.2/1.3 complete, Task 1.1 absorbed | Multiround naming adopted (was stage1). Balance test script created. error_indicators.py created. Solver copy created. |
+| 2 | 2026-03-27 | Phase 2 Tasks 2.1–2.2 | Tasks 2.1–2.2 complete | Environment skeleton: __init__, reset, _build_observation, _get_element_level. Solver copy: icase added to reset(). _build_queue stubbed. 6 implementation decisions documented (see Phase 2 notes). |
 
 ---
 

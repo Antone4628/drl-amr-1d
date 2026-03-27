@@ -794,7 +794,8 @@ class DGAdvectionSolver:
             self.balance_mesh(self.balance)
     
     def reset(self, refinement_mode='none', refinement_level=0, 
-              refinement_probability=0.5, refinement_max_level=3):
+              refinement_probability=0.5, refinement_max_level=3,
+              icase=None):
         """
         Reset solver to initial state with optional refinement.
         
@@ -805,10 +806,16 @@ class DGAdvectionSolver:
             refinement_level: Target level for 'fixed' mode.
             refinement_probability: Probability for 'random' mode.
             refinement_max_level: Max level for 'random' mode.
+            icase: Test case identifier. If provided, switches the IC type
+                for this episode. If None, keeps the current icase.
             
         Returns:
             Initial solution vector.
         """
+        # Switch IC type if requested (multi-IC training support)
+        if icase is not None:
+            self.icase = icase
+        
         # Reset to original 4-element grid
         self.xelem = np.array([-1, -0.4, 0, 0.4, 1])
         self.nelem = len(self.xelem) - 1
