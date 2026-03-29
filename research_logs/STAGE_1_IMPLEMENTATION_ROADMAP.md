@@ -2,8 +2,8 @@
 
 **Project:** DRL-AMR Stage 1 — Multi-Round Sequential Architecture  
 **Created:** 2026-03-24  
-**Last Updated:** 2026-03-27 (Phase 2 Tasks 2.1–2.2 complete)  
-**Status:** Phase 2 in progress — Tasks 2.1–2.2 complete; Tasks 2.3–2.8 not started  
+**Last Updated:** 2026-03-29 (Phase 2 complete — all environment methods implemented)  
+**Status:** Phase 2 complete; Phase 3 next  
 **Authoritative Spec:** `strategy/proposals/Stage_1_Architecture_Specification.md`
 
 ---
@@ -42,6 +42,9 @@ This roadmap covers the implementation of Stage 1A (core architecture build) thr
 - `research_logs/STAGE_1_IMPLEMENTATION_ROADMAP.md` — this roadmap
 - `research_logs/EXP_LOG_S1_*.md` — Stage 1 experiment logs
 
+**New files** added during Phase 4.5:
+- `notebooks/interactive_amr_multiround_tester_code.py` — interactive Jupyter notebook tester for multiround environment (template: `notebooks/interactive_amr_testing_notebook_code.py`)
+
 **New files** added during Phase 1:
 - `numerical/solvers/dg_advection_solver_multiround.py` — solver copy for multiround architecture
 - `numerical/solvers/error_indicators.py` — standalone error indicator, threshold, and normalization utilities
@@ -49,7 +52,7 @@ This roadmap covers the implementation of Stage 1A (core architecture build) thr
 
 **Modified files** (shared infrastructure):
 - `numerical/solvers/dg_advection_solver.py` — ~~max-over-interval tracking, balance hooks~~ no modifications needed (Task 1.1 absorbed into environment)
-- `numerical/amr/adapt.py` — no modifications needed (balance works as-is; environment handles cascade tracking)
+- `numerical/amr/adapt.py` — periodic balance fix: added `periodic=True` flag to `check_balance()`, `balance_mark()`, `enforce_balance()`; fixed `check_balance()` to compare last-vs-first element for periodic domains
 
 **Old files left in place** (not deleted, not moved):
 - `numerical/environments/dg_amr_env.py` — reference for implementation patterns
@@ -133,7 +136,7 @@ The current codebase has `balance=False` in evaluation. Stage 1 requires `balanc
 
 3. **Coarsening-induced violations are fully undone by `enforce_balance()`.** Coarsening a sibling pair whose parent would violate 2:1 balance causes `enforce_balance` to immediately re-refine the parent back into the same children — a complete no-op. This confirms D-025: **action masking must prevent balance-violating coarsening** rather than relying on post-hoc enforcement.
 
-4. **`check_balance()` limitation:** Only checks `np.abs(np.diff(levels)) <= 1` on adjacent active elements. Does not check periodic wrap-around (first vs last element). May need to be extended or supplemented in the environment for periodic domains.
+4. **`check_balance()` limitation (FIXED 2026-03-27):** Originally only checked `np.abs(np.diff(levels)) <= 1` on adjacent active elements, missing periodic wrap-around (first vs last element). Fixed by adding last-vs-first comparison and `periodic=True` parameter to `check_balance()`, `balance_mark()`, and `enforce_balance()`. Periodic boundary test added to `balance_test.py` confirming the fix catches wrap-around violations and `enforce_balance` resolves them.
 
 5. **Action masking coarsen check:** Coarsen should be masked if: `any(abs((current_level - 1) - neighbor_level) > 1)` for the would-be parent's neighbors. This prevents the wasted coarsen-then-undo cycle.
 
@@ -161,8 +164,9 @@ Factor out the error indicator computation (boundary jump magnitude) into a stan
 ---
 
 ### Phase 2: New Gym Environment
-**Status:** In Progress (Tasks 2.1–2.2 complete, 2026-03-27)  
-**Estimated effort:** 3–4 sessions (largest phase)
+**Status:** Complete (2026-03-29, all 17 methods implemented)  
+**Estimated effort:** 3–4 sessions (largest phase)  
+**Actual effort:** 5 sessions (Tasks 2.1–2.8)
 
 This is the core implementation — `numerical/environments/dg_amr_env_multiround.py`. Implements the full architecture from the spec (§2–§9).
 
@@ -197,55 +201,81 @@ This is the core implementation — `numerical/environments/dg_amr_env_multiroun
 
 **Task 2.3: Action masking**
 
-- [ ] Implement `action_masks() → np.array([bool, bool, bool])`
-- [ ] Refine mask: valid if current_level < max_level
-- [ ] Coarsen mask: valid if sibling is active AND coarsening would not violate 2:1 balance
-- [ ] Do-nothing mask: always True
-- [ ] Implement sibling lookup (via label_mat parent matching)
-- [ ] Implement post-coarsening balance check (check parent's would-be neighbors' levels)
+- [x] Implement `action_masks() → np.array([bool, bool, bool])`
+- [x] Refine mask: valid if current_level < max_level
+- [x] Coarsen mask: valid if sibling is active AND coarsening would not violate 2:1 balance
+- [x] Do-nothing mask: always True
+- [x] Implement sibling lookup (via label_mat parent matching)
+- [x] Implement post-coarsening balance check (check parent's would-be neighbors' levels)
 - [ ] Test: verify masks on elements at max_level, base level, near level boundaries
 
 **Task 2.4: Action execution and cascade handling**
 
-- [ ] Implement action execution: refine → split element; coarsen → merge with sibling; do-nothing → skip
-- [ ] After action: enforce 2:1 balance (cascade)
-- [ ] Track cascade-consumed elements: maintain a set of element IDs consumed by cascades in the current round
-- [ ] When advancing through the queue, skip elements in the consumed set
+- [x] Implement action execution: refine → split element; coarsen → merge with sibling; do-nothing → skip
+- [x] After action: enforce 2:1 balance (cascade)
+- [x] Track cascade-consumed elements: maintain a set of element IDs consumed by cascades in the current round
+- [x] When advancing through the queue, skip elements in the consumed set (via `consumed_elements` set)
 - [ ] Test: refine an element that triggers a cascade, verify consumed elements are tracked
+
+**Notes (2026-03-27) — Implementation decisions and fixes during Tasks 2.3–2.4:**
+
+7. **Verbosity system added.** `verbosity` parameter on environment (0=silent/training, 1=summary/episode-level, 2=detailed/step-level narrative). `_log(level, msg)` helper method. Logging added to `reset()`, `_build_queue()`, `_build_observation()`, `action_masks()`, `_can_coarsen()`, `_execute_action()`, `_detect_cascade_elements()`. **All remaining methods in the buildout must include appropriate `_log()` calls at both levels.** The goal is a complete step-level narrative at verbosity=2 that traces the full multi-round episode for debugging and verification.
+8. **`_find_sibling()` uses label_mat parent/child lookup.** Goes through `label_mat[parent-1][2:4]` to get both children, identifies sibling as the other child. More robust than the old `mark()` function's `elem ± 1` adjacency guessing. Uses `np.where(solver.active == sibling_id)` for active-list lookup (~15 elements, negligible cost).
+9. **`_can_coarsen()` has 4 conditions:** (a) sibling exists and is active, (b) sibling not cascade-created this round, (c) post-coarsening left neighbor level difference ≤ 1, (d) post-coarsening right neighbor level difference ≤ 1. Neighbor indices use periodic wrap-around via `% n_active`.
+10. **`_execute_action()` uses separated action/balance pattern.** Calls `solver.adapt_mesh(balance=False)` then `solver.balance_mesh(balance=True)` separately. After balance, manually calls `_update_matrices()` and `_update_forcing()` since `balance_mesh()` does not rebuild operators. Active set diff between post-action and post-balance identifies cascade elements.
+11. **Periodic `check_balance()` bug fixed.** Added last-vs-first element comparison and `periodic=True` parameter to `check_balance()`, `balance_mark()`, `enforce_balance()`. Backward-compatible (default `periodic=True`). Confirmed with new `periodic_balance_test()` in `balance_test.py`.
+
+**Notes (2026-03-28) — Implementation decisions during Tasks 2.5–2.6:**
+
+12. **`_build_queue()` stores element IDs, not active-array indices.** Active-array indices go stale after each action (refine/coarsen/cascade changes `solver.active`). Element IDs are stable — resolved to current active-array index at presentation time via `np.where(solver.active == elem_id)`. If an element is no longer active (refined away, coarsened, consumed), it's skipped.
+13. **`_advance_queue()` handles cascading transitions.** Uses a `while True` loop: try next queue element → if queue exhausted, check round transition → if all rounds done, check interval transition → if all intervals done, episode complete. `queue_position = -1` before `continue` so the loop increment brings it to 0.
+14. **`_compute_local_reward()` takes pre-action raw error as argument.** After refinement the original element is gone, so error must be captured before action execution. `step()` will compute errors and pass `e_k` in.
+15. **`_compute_global_reward()` has conditional guards.** Under-refinement penalty only if `level < max_level` (can't blame agent for max-level elements). Over-refinement penalty only if `level > 0` (base-level elements with low error aren't over-refined). Global reward is always ≤ 0 (penalty-only, no positive component).
+16. **`_advance_solver()` computes dt locally from actual mesh.** Uses `courant_max * dx_min / wave_speed` with no /2 safety margin — CFL=0.1 is already conservative for 5-stage RK4 with upwind DG (stability limit ≈ 1/(2p+1) ≈ 0.11 for p=4). dt is passed explicitly to `solver.step(dt=step_dt)`. Cuts sub-steps per remesh interval roughly in half compared to the solver's internal conservative estimate. Pre-advance error snapshot included in max-over-interval tracking (t_τ is in the interval). `max_interval_errors` accumulator is owned by `_advance_solver()`, not `_advance_queue()`.
+
+**Notes (2026-03-29) — Implementation decisions during Tasks 2.7–2.8:**
+
+17. **`_advance_queue()` refactored to return transition signals.** Original implementation handled interval transitions internally (recomputed thresholds, rebuilt queue, continued loop). Refactored so round transitions stay internal but interval/done transitions return immediately without setup. Returns `{'transition': 'element'|'interval'|'done', 'skipped': int}`. This gives `step()` the hook to insert solver advance + global reward between "all rounds done" and "new interval setup."
+18. **New `_start_new_interval()` method extracted.** Increments `remesh_step`, recomputes thresholds from post-advance errors, resets round state, rebuilds queue, sets first element. Called by `step()` after `_advance_solver()` and `_compute_global_reward()`. Fixes a threshold timing bug in the original `_advance_queue()` — thresholds for the new interval now correctly come from post-advance errors (the error landscape the agent will face), not pre-advance errors.
+19. **`step()` orchestration is linear.** Flat flow: capture pre-action error → execute action → local reward → advance queue → (if interval/done: solver advance + global reward) → (if interval: start new interval) → build observation → return. No nested conditionals. `r_global` initializes to 0.0 so reward formula `λ * r_local + r_global` works uniformly.
+20. **Task 2.8 (`_sample_ic()`) folded into `reset()`.** IC sampling was already fully implemented in `reset()` via `self.np_random.choice(self.ic_pool)` with override via `options['icase']`. No separate method needed. Remaining verification (all 7 ICs work, uniformity check) deferred to Phase 4.5 interactive testing / Phase 5 integration testing.
+21. **Info dict is comprehensive for training diagnostics.** Includes: element_id, action, pre_action_error, n_active_pre/post, n_cascade, resource_usage, r_local, r_global, reward, transition type, queue_skipped, remesh_step, round_number, episode_steps. Solver advance diagnostics (T, n_steps, max_error_peak) appended on interval-terminal steps only.
 
 **Task 2.5: Adaptation round and queue management**
 
-- [ ] Implement `_build_queue() → sorted list of element indices`
-- [ ] Compute priority for each element (distance from neutral zone, log-scaled)
-- [ ] Sort descending by priority magnitude
-- [ ] Implement round progression: advance through queue, skip consumed elements, detect round completion
-- [ ] Implement multi-round management: after round complete, increment round counter, rebuild queue from updated mesh, reset consumed set
-- [ ] Implement remesh interval completion: after all rounds done, advance solver, compute global reward, increment remesh_step
+- [x] Implement `_build_queue() → sorted list of element IDs` (replaced stub)
+- [x] Compute priority for each element (distance from neutral zone, log-scaled)
+- [x] Sort descending by priority magnitude
+- [x] Implement `_advance_queue()`: advance through queue, skip consumed elements, detect round/interval/episode completion
+- [x] Implement multi-round management: after round complete, increment round counter, rebuild queue from updated mesh, reset consumed set
+- [x] Implement remesh interval transition: increment remesh_step, recompute thresholds from post-advance errors
+- [x] Implement `_advance_solver()`: CFL sub-stepping with max-over-interval error accumulation (D-008)
 
 **Task 2.6: Reward computation**
 
-- [ ] Implement `_compute_local_reward(element_idx, action) → float`
-- [ ] Classification against e_max, e_min using instantaneous error
-- [ ] Penalty table: p_ur for wrong coarsening of under-refined, p_or for wrong refinement of over-refined, p_cr for correct coarsening of over-refined
-- [ ] Implement `_compute_global_reward() → float`
-- [ ] Sum penalties over all active elements using max-over-interval errors
-- [ ] Classification against pre-adaptation thresholds (stored at remesh interval start)
-- [ ] Implement reward delivery in `step()`: λ * r_local for mid-round steps, λ * r_local + r_global for remesh-interval-terminal step
+- [x] Implement `_compute_local_reward(e_k, action) → float`
+- [x] Classification against e_max, e_min using pre-action instantaneous error
+- [x] Penalty table: p_ur for wrong coarsening of under-refined, p_or for wrong refinement of over-refined, p_cr for correct coarsening of over-refined
+- [x] Implement `_compute_global_reward() → float`
+- [x] Sum penalties over all active elements using max-over-interval errors
+- [x] Classification against pre-adaptation thresholds (stored at remesh interval start)
+- [x] Conditional guards: under-refinement only if level < max_level; over-refinement only if level > 0
+- [ ] Implement reward delivery in `step()`: λ * r_local for mid-round steps, λ * r_local + r_global for remesh-interval-terminal step (deferred to Task 2.7)
 - [ ] Test: verify local reward values against hand calculations for known error/threshold/action combinations
 - [ ] Test: verify global reward uses max-over-interval errors (not instantaneous)
 
 **Task 2.7: step() integration**
 
-- [ ] Implement full `step(action) → (obs, reward, terminated, truncated, info)`
-- [ ] Wire together: action execution → cascade → local reward → queue advance → (if round done: next round or solver advance + global reward) → build next observation → check episode termination
-- [ ] Info dict: include per-step diagnostics (action taken, local reward, element_id, round_number, resource_usage, etc.)
+- [x] Implement full `step(action) → (obs, reward, terminated, truncated, info)`
+- [x] Wire together: action execution → cascade → local reward → queue advance → (if round done: next round or solver advance + global reward) → build next observation → check episode termination
+- [x] Info dict: include per-step diagnostics (action taken, local reward, element_id, round_number, resource_usage, etc.)
 - [ ] Test: run a complete episode manually with fixed actions, verify all state transitions
 - [ ] Test: run with random actions, verify no crashes across 100 episodes with all ICs
 
 **Task 2.8: IC sampling**
 
-- [ ] Implement IC pool: list of icase values {1, 10, 12, 13, 14, 15, 16}
-- [ ] `reset()` samples uniformly from pool
+- [x] Implement IC pool: list of icase values {1, 10, 12, 13, 14, 15, 16}
+- [x] `reset()` samples uniformly from pool
 - [ ] Verify solver handles all IC types correctly (some have negative values)
 - [ ] Test: 100 resets, verify all ICs are sampled approximately uniformly
 
@@ -328,6 +358,90 @@ Implement the conventional threshold-based AMR baseline (D-016) that serves as t
 
 ---
 
+### Phase 4.5: Interactive Multiround Tester
+**Status:** Not Started  
+**Estimated effort:** 1 session  
+**Priority:** Build before Phase 5 integration testing — serves as the primary manual verification tool
+
+Create a Jupyter notebook interactive tester for the multiround environment, analogous to `notebooks/interactive_amr_testing_notebook_code.py` which was invaluable during the Masters thesis. The tester lets the researcher act as the agent — stepping through the queue one element at a time, choosing actions, and seeing the effects on mesh, solution, rewards, and episode state in real time.
+
+**Template:** `notebooks/interactive_amr_testing_notebook_code.py` (4-cell notebook structure)
+
+The existing tester is a complete, well-documented reference (~900 lines). Its architecture:
+- **Cell 1:** Imports and matplotlib SVG configuration
+- **Cell 2:** `InteractiveAMRTester` class with ipywidgets-based UI
+- **Cell 3:** Instantiation and `show_tester()` call
+- **Cell 4:** Manual SVG save fallback
+
+The class uses `ipywidgets` (sliders, radio buttons, buttons) with `matplotlib` inline figures. The `render()` method clears output and redraws all plots + widgets on each action. Console output goes to a scrollable `widgets.Output` area. The `on_apply_action()` callback overrides the environment's element selection, calls `env.step()`, updates history lists, and triggers `render()`.
+
+**Key structural differences from old tester (important for implementation):**
+
+| Aspect | Old Tester | Multiround Tester |
+|--------|-----------|-------------------|
+| Element selection | User picks element via slider | Environment presents element (queue order) — display which element is current, user picks action only |
+| Actions | Coarsen/No Change/Refine (mapped -1/0/+1) | Same 3 actions but via `env.step(0\|1\|2)` directly |
+| Action masking | Not shown | Display current action mask from `env.action_masks()` — grey out invalid actions |
+| Reward display | Single reward = accuracy + penalty | Dual: local reward (per step) + global reward (on interval-terminal steps). Show λ*r_local and r_global separately |
+| Settings panel | gamma_c, budget, machine_eps, acc_scale | α, β, p_ur, p_or, p_cr, λ, element_budget, N_remesh, icase selector, initial_refinement_level, verbosity |
+| Episode structure | Flat (action → reward → repeat) | Nested: show remesh_step, round_number, queue_position. Progress indicators for round and interval |
+| Timestep button | "Take Timestep" (manipulates RL iteration counter) | Not needed — solver advance happens automatically at interval boundaries. Instead: "Step" button (one env.step()), "Auto-complete Round" (run through remaining queue with do-nothing), "Auto-complete Interval" (all remaining rounds with do-nothing + solver advance) |
+| Environment | `DGAMREnv` (old, steady-solve reward) | `DGAMREnvMultiround` with `verbosity=2` for full narrative |
+| Solver | `DGAdvectionSolver` with `balance=False` | `DGAdvectionSolver` (multiround copy) with `balance=False` (env handles balance) |
+| Error display | Not shown | Show e_max, e_min thresholds, per-element error classification (under/neutral/over) |
+| Queue display | N/A | Show current queue with priorities, highlight current element, mark consumed elements |
+
+**Task 4.5.1: Multiround tester class**
+
+- [ ] Create `notebooks/interactive_amr_multiround_tester_code.py` (same 4-cell pattern)
+- [ ] `__init__()`: create solver and `DGAMREnvMultiround` with `verbosity=2`, initialize history lists, set up widgets
+- [ ] `setup_widgets()`: action radio (Coarsen/Hold/Refine), Step button, Auto-complete Round button, Auto-complete Interval button, Reset button, Save SVG button, settings sliders (α, β, p_ur, p_or, p_cr, λ, budget, N_remesh, icase dropdown, initial_refinement_level), Apply Settings button
+- [ ] `on_step()`: call `env.step(action)`, update histories, render. The environment presents the element (no element slider needed). Display action mask and grey out invalid radio options.
+- [ ] `on_auto_complete_round()`: loop `env.step(1)` (do-nothing) until `_advance_queue` returns a round or interval transition. Useful for fast-forwarding through neutral elements.
+- [ ] `on_auto_complete_interval()`: loop do-nothing through remaining rounds until interval transition (triggers solver advance + global reward). Shows the global reward result.
+- [ ] `on_reset()`: call `env.reset()`, clear histories, render
+- [ ] `on_apply_settings()`: recreate environment with new parameter values
+
+**Task 4.5.2: Visualization (render method)**
+
+- [ ] **Row 0: Mesh state** (same as old tester) — elements as rectangles with height = level, element IDs labeled, current element highlighted in orange, cascade elements highlighted in yellow
+- [ ] **Row 1: Solution plot** (same as old tester) — current solution, element boundaries, highlighted current element region
+- [ ] **Row 2: Error classification plot** (NEW) — bar chart of per-element errors with e_max and e_min threshold lines, color-coded: red = under-refined (e > e_max), blue = over-refined (e < e_min), green = neutral
+- [ ] **Row 3: Three history panels** — Action History (colored bars by action type, mark round/interval boundaries), Reward History (stacked local + global, show λ scaling), Resource Usage (element count / budget over time)
+- [ ] **Status bar** above plots: `Interval 2/4 | Round 2/3 | Queue pos 5/12 | Element ID 17 (idx 4) | Level 2 | Mask: [C:✓ H:✓ R:✗]`
+
+**Task 4.5.3: Console output**
+
+- [ ] Pipe `verbosity=2` output to the console widget (captures the full step-level narrative from `_log()` calls)
+- [ ] On interval-terminal steps, show solver advance summary and global reward breakdown
+- [ ] On reset, show IC selected, initial thresholds, initial queue
+
+**Task 4.5.4: Verification using the tester**
+
+This task covers the unchecked test items from Phase 2 that the interactive tester is designed to verify:
+
+- [ ] Observation verification (Task 2.2): construct observations for a known mesh state, verify values against hand calculations
+- [ ] Action mask verification (Task 2.3): verify masks on elements at max_level, base level, near level boundaries
+- [ ] Cascade tracking verification (Task 2.4): refine an element that triggers a cascade, verify consumed elements are tracked and skipped
+- [ ] Local reward verification (Task 2.6): verify local reward values against hand calculations for known error/threshold/action combinations
+- [ ] Global reward verification (Task 2.6): verify global reward uses max-over-interval errors (not instantaneous)
+- [ ] State transition verification (Task 2.7): run a complete episode with fixed actions, verify all round/interval/episode transitions
+- [ ] IC verification (Task 2.8): verify all 7 ICs work correctly with the full environment
+- [ ] Stress test: run 100 episodes with random actions across all ICs via script (not interactive), verify no crashes
+
+**Implementation notes:**
+
+- The old tester overrides `env.current_element_index` to target user-selected elements. The multiround tester does NOT need this — the environment presents elements in queue order. The user only chooses the action.
+- The old tester uses `env.step(action)` which returns `(obs, reward, terminated, truncated, info)`. The multiround env returns the same Gymnasium interface. The info dict has different keys (see decision 21 in Phase 2 notes).
+- The old tester manipulates `env.current_rl_iteration` to trigger timesteps. The multiround tester doesn't need this hack — solver advance happens automatically when `_advance_queue()` returns `'interval'` or `'done'`.
+- Use `verbosity=2` on the environment to get the full narrative in the console widget. This alone provides most of the debugging information needed.
+- The `# ====...` comment header convention from the old tester should be followed.
+
+**Depends on:** Phase 2 (environment must be complete)  
+**Blocks:** Phase 5 Task 5.1 (replaces most programmatic integration tests with interactive verification)
+
+---
+
 ### Phase 5: Integration Testing and First Training Runs
 **Status:** Not Started  
 **Estimated effort:** 2–3 sessions
@@ -369,7 +483,7 @@ Implement the conventional threshold-based AMR baseline (D-016) that serves as t
 - [ ] Write Stage 1A experiment log with findings
 - [ ] Merge `feature/multiround-architecture` to `master` if success criterion met
 
-**Depends on:** Phases 2, 3, 4  
+**Depends on:** Phases 2, 3, 4, 4.5  
 **Blocks:** Stage 1B
 
 ---
@@ -430,9 +544,10 @@ Systematic ablation sweeps. Each ablation is a separate experiment log.
 | S1-0.1 | Repo setup and dependency validation | 0 | Complete | sb3-contrib installed, multiround naming adopted | — |
 | S1-1.1 | Solver max-over-interval tracking | 1 | Absorbed into Phase 2 | Accumulator belongs in environment, not solver | — |
 | S1-1.2 | 2:1 balance enforcement validation | 1 | Complete | Cascades work; coarsen violations undone by enforce_balance; action masking confirmed | — |
-| S1-2.1 | New environment implementation | 2 | Tasks 2.1–2.2 complete | __init__, reset, _build_observation, _get_element_level implemented; _build_queue stubbed | — |
+| S1-2.1 | New environment implementation | 2 | Complete (all methods) | Tasks 2.1–2.2: skeleton, observation. Tasks 2.3–2.4: action masking, action execution, verbosity, periodic balance fix. Tasks 2.5–2.6: priority queue (_build_queue), queue traversal (_advance_queue), solver advance (_advance_solver), local reward (_compute_local_reward), global reward (_compute_global_reward). Tasks 2.7–2.8: step() integration (linear orchestration), _advance_queue refactored to return transition signals, _start_new_interval extracted, IC sampling folded into reset(). | — |
 | S1-3.1 | Training infrastructure and smoke test | 3 | Not started | — | — |
 | S1-4.1 | Threshold AMR baseline | 4 | Not started | — | — |
+| S1-4.5.1 | Interactive multiround tester | 4.5 | Not started | — | — |
 | S1-5.1 | Integration test and first training | 5 | Not started | — | — |
 
 ---
@@ -443,6 +558,9 @@ Systematic ablation sweeps. Each ablation is a separate experiment log.
 |---------|------|-------|-----------------|-------|
 | 1 | 2026-03-25 | Phase 0 + Phase 1 | Phase 0 complete, Tasks 1.2/1.3 complete, Task 1.1 absorbed | Multiround naming adopted (was stage1). Balance test script created. error_indicators.py created. Solver copy created. |
 | 2 | 2026-03-27 | Phase 2 Tasks 2.1–2.2 | Tasks 2.1–2.2 complete | Environment skeleton: __init__, reset, _build_observation, _get_element_level. Solver copy: icase added to reset(). _build_queue stubbed. 6 implementation decisions documented (see Phase 2 notes). |
+| 3 | 2026-03-27 | Phase 2 Tasks 2.3–2.4 + fixes | Tasks 2.3–2.4 complete, periodic balance fix, verbosity system | Action masking: _find_sibling, _can_coarsen (4-condition check with periodic wrap), action_masks. Action execution: _execute_action (separated action/balance for cascade tracking), _detect_cascade_elements. Verbosity: _log helper + logging in all completed methods. Fixed check_balance periodic wrap-around bug, added periodic flag to 3 balance functions. 5 implementation decisions documented (decisions 7–11). |
+| 4 | 2026-03-28 | Phase 2 Tasks 2.5–2.6 | Tasks 2.5–2.6 complete | Queue: _build_queue replaced stub with priority-magnitude sorting (element IDs for stability). _advance_queue handles round/interval/episode transitions with element ID resolution. Solver: _advance_solver with env-level CFL dt (no /2 margin), max-over-interval error accumulation. Reward: _compute_local_reward (classification table, takes pre-action error). _compute_global_reward (penalty-only, conditional guards on level). Removed redundant max_interval_errors reset from _advance_queue (owned by _advance_solver). 5 implementation decisions documented (decisions 12–16). |
+| 5 | 2026-03-29 | Phase 2 Tasks 2.7–2.8 (Phase 2 complete) | Tasks 2.7–2.8 complete, Phase 2 complete | Refactored _advance_queue() to return transition signals ('element'/'interval'/'done') instead of handling interval setup internally. Extracted _start_new_interval() — fixes threshold timing (post-advance errors). Implemented step() with flat linear orchestration. Task 2.8 folded into reset() (already implemented). Added Phase 4.5 (Interactive Multiround Tester) to roadmap as Phase 5 prerequisite. 5 implementation decisions documented (decisions 17–21). Phase 2 structurally complete: all 17+1 methods implemented (17 original + _start_new_interval). |
 
 ---
 

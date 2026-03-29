@@ -573,6 +573,416 @@ class DGAMREnvMultiround(gym.Env):
         return result
     
     # =========================================================================
+    # Queue Advancement and Transitions
+    # =========================================================================
+
+    def _advance_queue(self) -> Dict[str, Any]:
+        """Advance to the next element, handling round transitions internally.
+
+        Called after action execution and reward computation in step().
+        Finds the next valid element in the queue (skipping elements no
+        longer in solver.active), and handles round transitions when the
+        queue is exhausted.
+
+        When all rounds in a remesh interval are complete, returns a
+        transition signal ('interval' or 'done') WITHOUT performing any
+        setup. The caller (step()) is responsible for:
+            1. Running solver advance
+            2. Computing global reward
+            3. Calling _start_new_interval() (if not done)
+
+        The queue stores element IDs for stability across mesh changes.
+        At each step, the ID is resolved to a current active-array index.
+        If the ID is no longer active (refined, coarsened, or cascade-
+        consumed), the element is skipped.
+
+        Transitions:
+            element  → normal advance within current round
+            round    → queue exhausted, start next round (handled internally)
+            interval → all rounds done; caller must advance solver + setup
+            done     → all rounds done AND last remesh interval; episode over
+
+        Returns:
+            Dict with transition diagnostics:
+                - 'transition': str ('element', 'interval', 'done')
+                - 'skipped': int (elements skipped as no longer active)
+        """
+        skipped = 0
+
+        while True:
+            # =================================================================
+            # Try advancing within the current queue
+            # =================================================================
+            self.queue_position += 1
+
+            while self.queue_position < len(self.queue):
+                elem_id = self.queue[self.queue_position]
+
+                # =============================================================
+                # Resolve element ID to current active-array index
+                # If not found, element was consumed — skip it
+                # =============================================================
+                matches = np.where(self.solver.active == elem_id)[0]
+                if len(matches) > 0:
+                    self.current_element_idx = int(matches[0])
+                    self._log(2, f"  Queue advance: elem {elem_id} "
+                                  f"(active_idx={self.current_element_idx})"
+                                  f"{f', skipped {skipped}' if skipped else ''}")
+                    return {'transition': 'element', 'skipped': skipped}
+
+                # Element no longer active — skip
+                skipped += 1
+                self._log(2, f"    Skipping elem {elem_id} (no longer active)")
+                self.queue_position += 1
+
+            # =================================================================
+            # Queue exhausted — check for round or interval transition
+            # =================================================================
+            if self.round_number < self.solver.max_level:
+                # =============================================================
+                # Start next round within the same remesh interval
+                # Rebuild queue from updated mesh, reset per-round state
+                # =============================================================
+                self.round_number += 1
+                self.consumed_elements = set()
+                self.queue = self._build_queue()
+                self.queue_position = -1  # will be incremented to 0 at top of loop
+
+                self._log(2, f"\n  --- Round {self.round_number}/{self.solver.max_level} ---")
+
+                # Continue the while True loop to find first valid element
+                skipped = 0
+                continue
+
+            else:
+                # =============================================================
+                # All rounds complete — signal to caller
+                # Do NOT set up the new interval here. step() must:
+                #   1. Advance the solver (_advance_solver)
+                #   2. Compute global reward (_compute_global_reward)
+                #   3. Call _start_new_interval() if not done
+                # =============================================================
+                if self.remesh_step + 1 >= self.n_remesh:
+                    self._log(1, f"  All rounds complete — final remesh interval")
+                    return {'transition': 'done', 'skipped': skipped}
+                else:
+                    self._log(1, f"  All rounds complete — interval boundary")
+                    return {'transition': 'interval', 'skipped': skipped}
+                
+    def _start_new_interval(self) -> None:
+        """Set up the next remesh interval after solver advance.
+
+        Called by step() after solver advance and global reward computation,
+        when _advance_queue() returned 'interval'. Performs all bookkeeping
+        to prepare for the first adaptation round of the new interval.
+
+        Must be called AFTER _advance_solver() so that thresholds are
+        computed from the post-advance error distribution — the error
+        landscape the agent will observe and be judged against in the
+        upcoming interval (Spec §5.2, D-021).
+        """
+        # =====================================================================
+        # Advance the remesh interval counter
+        # =====================================================================
+        self.remesh_step += 1
+
+        # =====================================================================
+        # Recompute thresholds from post-advance error distribution
+        # These are fixed for the entire upcoming remesh interval (D-021).
+        # =====================================================================
+        errors = compute_element_errors(self.solver)
+        self.e_max, self.e_min = compute_alpha_thresholds(
+            errors, self.alpha, self.beta
+        )
+
+        # =====================================================================
+        # Reset round state for the new interval
+        # max_interval_errors is initialized by _advance_solver() at the
+        # start of each solver advance — no need to reset here.
+        # =====================================================================
+        self.round_number = 1
+        self.consumed_elements = set()
+
+        # =====================================================================
+        # Build queue and set first element for the new interval
+        # =====================================================================
+        self.queue = self._build_queue()
+        self.queue_position = 0
+        first_elem_id = self.queue[0]
+        self.current_element_idx = int(
+            np.where(self.solver.active == first_elem_id)[0][0]
+        )
+
+        self._log(1, f"\n{'='*40}")
+        self._log(1, f"  Remesh interval {self.remesh_step + 1}/{self.n_remesh}")
+        self._log(1, f"{'='*40}")
+        self._log(2, f"  New thresholds: e_max={self.e_max:.6f}, "
+                      f"e_min={self.e_min:.6f}")
+        self._log(2, f"  --- Round 1/{self.solver.max_level} ---")
+    
+    # =========================================================================
+    # Solver Advance
+    # =========================================================================
+
+    def _advance_solver(self) -> Dict[str, Any]:
+        """Advance the PDE solver by one remesh interval T.
+
+        Called after all adaptation rounds complete, before global reward
+        computation. Advances the solution through multiple CFL-limited
+        sub-steps while tracking max-over-interval errors (D-008) for
+        the retrospective reward.
+
+        Computes dt from the current (post-adaptation) mesh using the
+        actual smallest element size. The CFL number (courant_max=0.1)
+        provides the stability margin — no additional safety factor is
+        applied. dt is passed explicitly to solver.step() so the solver's
+        internal self.dt is not relied upon.
+
+        The last sub-step uses a potentially smaller dt to land exactly
+        at T, preventing systematic drift over many remesh intervals.
+
+        Architecture Spec §4.1–4.2.
+
+        Returns:
+            Dict with solver advance diagnostics:
+                - 'T': remesh interval duration (seconds)
+                - 'dt': CFL-limited timestep used
+                - 'n_steps': number of sub-steps taken
+                - 'time_before': solver time before advance
+                - 'time_after': solver time after advance
+                - 'max_error_peak': largest element error seen during interval
+        """
+        # =====================================================================
+        # Compute remesh interval T from step_domain_fraction
+        # T = fraction * domain_length / wave_speed
+        # =====================================================================
+        domain_length = self.solver.xelem[-1] - self.solver.xelem[0]
+        T = self.step_domain_fraction * domain_length / self.solver.wave_speed
+
+        # =====================================================================
+        # Compute CFL-limited dt from current (post-adaptation) mesh
+        # No /2 safety margin — CFL=0.1 is already conservative for
+        # 5-stage RK4 with upwind DG (stability limit ≈ 1/(2p+1) ≈ 0.11)
+        # =====================================================================
+        dx_min = np.min(np.diff(self.solver.xelem))
+        dt = self.solver.courant_max * dx_min / self.solver.wave_speed
+        n_steps = max(1, int(np.ceil(T / dt)))
+
+        time_before = self.solver.time
+
+        self._log(2, f"  Solver advance: T={T:.6f}, dt={dt:.6f}, "
+                      f"n_steps={n_steps}")
+
+        # =====================================================================
+        # Initialize max-over-interval error accumulator (D-008)
+        # Includes pre-advance snapshot: t_τ is in [t_τ, t_τ + T]
+        # =====================================================================
+        n_active = len(self.solver.active)
+        self.max_interval_errors = np.zeros(n_active)
+
+        errors = compute_element_errors(self.solver)
+        self.max_interval_errors = np.maximum(self.max_interval_errors, errors)
+
+        # =====================================================================
+        # CFL sub-stepping loop
+        # Last step uses smaller dt to land exactly at T
+        # =====================================================================
+        time_advanced = 0.0
+
+        for step_i in range(n_steps):
+            step_dt = min(dt, T - time_advanced)
+            if step_dt <= 1e-15:
+                break
+
+            self.solver.step(dt=step_dt)
+            time_advanced += step_dt
+
+            # =================================================================
+            # Update max-over-interval errors after each sub-step
+            # Mesh is fixed during solver advance, so errors array stays
+            # aligned with solver.active throughout
+            # =================================================================
+            errors = compute_element_errors(self.solver)
+            self.max_interval_errors = np.maximum(
+                self.max_interval_errors, errors
+            )
+
+        max_error_peak = float(np.max(self.max_interval_errors))
+
+        self._log(2, f"  Solver advanced: {time_before:.6f} → "
+                      f"{self.solver.time:.6f}")
+        self._log(2, f"    Max-interval error peak: {max_error_peak:.6e}")
+
+        return {
+            'T': T,
+            'dt': dt,
+            'n_steps': n_steps,
+            'time_before': time_before,
+            'time_after': self.solver.time,
+            'max_error_peak': max_error_peak,
+        }
+
+    # =========================================================================
+    # Reward Computation
+    # =========================================================================
+
+    def _compute_local_reward(self, e_k: float, action: int) -> float:
+        """Compute local shaping reward for a single element action.
+
+        Classifies the agent's action against the element's pre-action
+        error indicator using the reward table (Architecture Spec §8.1).
+        Uses thresholds e_max, e_min fixed at the start of the current
+        remesh interval (D-021).
+
+        The reward is immediate and per-element — it tells the agent
+        whether its action was appropriate given the local error state.
+        Do-nothing is never penalized (the agent may have strategic
+        reasons to defer). Correct coarsening receives a positive
+        reward (D-020) to encourage resource conservation.
+
+        Penalty/reward scaling is logarithmic: an element 10x above
+        threshold incurs weight × 1, 100x above incurs weight × 2.
+        This provides smooth gradients without extreme penalties.
+
+        Args:
+            e_k: Raw (unnormalized) error indicator for the element,
+                computed BEFORE action execution. Passed in by step()
+                since the element may no longer exist after the action.
+            action: The agent's chosen action (0=coarsen, 1=hold, 2=refine).
+
+        Returns:
+            Local reward scalar (negative = penalty, positive = correct coarsen,
+            zero = correct/acceptable action).
+        """
+        eps = 1e-30
+        e_k = max(e_k, eps)
+
+        # =====================================================================
+        # Classify element into error region
+        # =====================================================================
+        if e_k > self.e_max and self.e_max > eps:
+            # -----------------------------------------------------------------
+            # Under-refined region: e_k > e_max
+            # Refine = correct (0), Hold = acceptable (0),
+            # Coarsen = wrong (penalty)
+            # -----------------------------------------------------------------
+            if action == 0:  # coarsen
+                log_ratio = abs(np.log10(e_k / self.e_max))
+                reward = -self.p_ur * log_ratio
+                self._log(2, f"    Local reward: UNDER-REFINED + coarsen → "
+                              f"-p_ur * {log_ratio:.4f} = {reward:.4f}")
+            else:
+                reward = 0.0
+                label = "refine (correct)" if action == 2 else "hold (acceptable)"
+                self._log(2, f"    Local reward: UNDER-REFINED + {label} → 0.0")
+
+        elif e_k < self.e_min and self.e_min > eps:
+            # -----------------------------------------------------------------
+            # Over-refined region: e_k < e_min
+            # Coarsen = correct (+p_cr), Hold = acceptable (0),
+            # Refine = wrong (penalty)
+            # -----------------------------------------------------------------
+            log_ratio = abs(np.log10(e_k / self.e_min))
+
+            if action == 2:  # refine
+                reward = -self.p_or * log_ratio
+                self._log(2, f"    Local reward: OVER-REFINED + refine → "
+                              f"-p_or * {log_ratio:.4f} = {reward:.4f}")
+            elif action == 0:  # coarsen
+                reward = self.p_cr * log_ratio
+                self._log(2, f"    Local reward: OVER-REFINED + coarsen → "
+                              f"+p_cr * {log_ratio:.4f} = {reward:.4f}")
+            else:
+                reward = 0.0
+                self._log(2, f"    Local reward: OVER-REFINED + hold (acceptable) → 0.0")
+
+        else:
+            # -----------------------------------------------------------------
+            # Neutral zone: e_min ≤ e_k ≤ e_max
+            # All actions are acceptable → zero reward
+            # -----------------------------------------------------------------
+            reward = 0.0
+            labels = {0: 'coarsen', 1: 'hold', 2: 'refine'}
+            self._log(2, f"    Local reward: NEUTRAL + {labels[action]} → 0.0")
+
+        return reward
+    
+    def _compute_global_reward(self) -> float:
+        """Compute global retrospective reward after solver advance.
+
+        Assesses the adapted mesh quality using max-over-interval errors
+        (Architecture Spec §8.2). Called once per remesh interval, after
+        all adaptation rounds are complete and the solver has advanced by T.
+
+        Uses the same thresholds (e_max, e_min) as the local reward —
+        fixed at the start of this remesh interval (D-021). This ensures
+        the global assessment evaluates decisions against the error
+        landscape the agent observed when deciding.
+
+        Conditional guards:
+            - Under-refinement penalty only applies to elements that could
+              have been further refined (level < max_level). An element at
+              max_level with high error is not the agent's fault.
+            - Over-refinement penalty only applies to elements refined
+              beyond base level (level > 0). A base-level element with
+              low error simply has a well-resolved region.
+
+        Returns:
+            Global reward scalar (≤ 0). Zero means the mesh perfectly
+            matches the error distribution during the solver advance.
+        """
+        eps = 1e-30
+        n_active = len(self.solver.active)
+        total_penalty = 0.0
+
+        # =====================================================================
+        # Diagnostic counters for logging
+        # =====================================================================
+        n_under = 0
+        n_over = 0
+        n_ok = 0
+
+        for i in range(n_active):
+            e_k = max(self.max_interval_errors[i], eps)
+            level = self._get_element_level(i)
+
+            if e_k > self.e_max and self.e_max > eps:
+                # =============================================================
+                # Under-refined: high error during solver advance
+                # Only penalize if the agent could have refined further
+                # =============================================================
+                if level < self.solver.max_level:
+                    log_ratio = abs(np.log10(e_k / self.e_max))
+                    total_penalty += self.p_ur * log_ratio
+                    n_under += 1
+                else:
+                    n_ok += 1  # at max_level, not agent's fault
+
+            elif e_k < self.e_min and self.e_min > eps:
+                # =============================================================
+                # Over-refined: low error means resolution was wasted
+                # Only penalize if element is actually refined (level > 0)
+                # =============================================================
+                if level > 0:
+                    log_ratio = abs(np.log10(e_k / self.e_min))
+                    total_penalty += self.p_or * log_ratio
+                    n_over += 1
+                else:
+                    n_ok += 1  # base level, nothing to coarsen
+
+            else:
+                n_ok += 1
+
+        reward = -total_penalty
+
+        self._log(1, f"  Global reward: {reward:.4f} "
+                      f"(under={n_under}, over={n_over}, ok={n_ok})")
+        self._log(2, f"    Thresholds: e_max={self.e_max:.6f}, "
+                      f"e_min={self.e_min:.6f}")
+
+        return reward
+    
+    # =========================================================================
     # Logging
     # =========================================================================
 
@@ -593,16 +1003,59 @@ class DGAMREnvMultiround(gym.Env):
     def _build_queue(self) -> List[int]:
         """Build priority-sorted queue of active element indices for one round.
 
-        Returns a list of indices into solver.active, sorted by distance
-        from the neutral zone (farthest first). See Architecture Spec §5.3.
+        Elements are sorted by distance from the neutral zone (farthest
+        first), as specified in Architecture Spec §5.3:
+
+            priority(k) =
+                log10(e_k / e_max)   if e_k > e_max   (under-refined)
+                log10(e_min / e_k)   if e_k < e_min   (over-refined)
+                0                    if neutral
+
+        Sort descending by priority. Neutral elements (priority = 0)
+        naturally sort to the end. This is a presentation efficiency
+        heuristic — it does NOT make decisions.
 
         Returns:
-            List of active-array indices in presentation order.
-
-        TODO: Replace with priority-magnitude sorting (Session 3, Task 2.5).
+            List of indices into solver.active in presentation order.
         """
-        queue = list(range(len(self.solver.active)))
-        self._log(2, f"  Queue built: {len(queue)} elements, order: {queue}")
+        # =====================================================================
+        # Compute per-element errors for priority calculation
+        # =====================================================================
+        errors = compute_element_errors(self.solver)
+        n_active = len(self.solver.active)
+
+        # =====================================================================
+        # Compute priority magnitude for each element
+        # Both under-refined and over-refined produce positive priorities.
+        # Neutral elements get priority 0. eps prevents log(0).
+        # =====================================================================
+        eps = 1e-30
+        priorities = np.zeros(n_active)
+
+        for i in range(n_active):
+            e_k = max(errors[i], eps)
+
+            if e_k > self.e_max and self.e_max > eps:
+                # Under-refined: positive log ratio
+                priorities[i] = np.log10(e_k / self.e_max)
+            elif e_k < self.e_min and self.e_min > eps:
+                # Over-refined: positive log ratio
+                priorities[i] = np.log10(self.e_min / e_k)
+            # else: neutral zone → priority stays 0.0
+
+        # =====================================================================
+        # Sort descending by priority (highest impact first)
+        # argsort is ascending, so negate for descending order.
+        # Store element IDs (not indices) for stability across mesh changes
+        # within a round — solver.active changes after each action.
+        # =====================================================================
+        sorted_indices = list(np.argsort(-priorities))
+        queue = [int(self.solver.active[i]) for i in sorted_indices]
+
+        self._log(2, f"  Queue built: {n_active} elements")
+        self._log(2, f"    Priorities: {['%.4f' % priorities[sorted_indices[j]] for j in range(len(sorted_indices))]}")
+        self._log(2, f"    Element IDs: {queue}")
+
         return queue
     
     # =========================================================================
@@ -727,6 +1180,173 @@ class DGAMREnvMultiround(gym.Env):
     # Core Gymnasium Methods
     # =========================================================================
 
+    def step(
+        self, action: int
+    ) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+        """Execute one agent decision and advance environment state.
+
+        Implements the innermost loop of the episode structure: a single
+        element visit within an adaptation round. The agent observes the
+        current element (observation returned by prior step/reset), selects
+        an action, and this method executes it, computes reward, advances
+        to the next element, and builds the next observation.
+
+        Reward delivery (Spec §8.3, D-007):
+            - Most steps: reward = λ * r_local
+            - Interval-terminal steps (last element of last round):
+              reward = λ * r_local + r_global
+              (solver advance + global retrospective inserted before
+              advancing to next interval)
+
+        Args:
+            action: Agent's chosen action for the current element.
+                0 = coarsen, 1 = do-nothing, 2 = refine.
+
+        Returns:
+            observation: np.ndarray of shape (8,) for the next element,
+                or zeros if episode is complete.
+            reward: Scalar reward for this step.
+            terminated: True if all remesh intervals are complete.
+            truncated: Always False (no truncation mechanism).
+            info: Dict with per-step diagnostics.
+        """
+        # =====================================================================
+        # 1. Capture pre-action error for the current element
+        # Must happen BEFORE _execute_action() since refinement destroys
+        # the element. Used by _compute_local_reward() for classification.
+        # =====================================================================
+        errors = compute_element_errors(self.solver)
+        pre_action_error = errors[self.current_element_idx]
+
+        pre_action_elem_id = int(self.solver.active[self.current_element_idx])
+        pre_action_n_active = len(self.solver.active)
+
+        self._log(2, f"\n  Step {self._episode_steps + 1}: "
+                      f"elem {pre_action_elem_id} "
+                      f"(idx={self.current_element_idx}), "
+                      f"error={pre_action_error:.6e}")
+
+        # =====================================================================
+        # 2. Execute the agent's action + balance enforcement
+        # Returns cascade diagnostics for info dict.
+        # =====================================================================
+        exec_result = self._execute_action(self.current_element_idx, action)
+
+        # =====================================================================
+        # 3. Compute local shaping reward from pre-action error
+        # =====================================================================
+        r_local = self._compute_local_reward(pre_action_error, action)
+
+        # =====================================================================
+        # 4. Advance the queue — find next element or detect transition
+        # Round transitions are handled internally by _advance_queue().
+        # Interval/done transitions are signaled back for step() to handle.
+        # =====================================================================
+        queue_result = self._advance_queue()
+        transition = queue_result['transition']
+
+        # =====================================================================
+        # 5. Handle interval boundary: solver advance + global reward
+        # For both 'interval' and 'done', we need to advance the solver
+        # and compute the global retrospective reward.
+        # =====================================================================
+        r_global = 0.0
+        solver_info = {}
+
+        if transition in ('interval', 'done'):
+            # =================================================================
+            # Advance solver by one remesh interval T
+            # Tracks max-over-interval errors for retrospective reward
+            # =================================================================
+            solver_info = self._advance_solver()
+
+            # =================================================================
+            # Compute global retrospective reward using max-over-interval
+            # errors and thresholds from this (now-completed) interval
+            # =================================================================
+            r_global = self._compute_global_reward()
+
+        # =====================================================================
+        # 6. Compute total reward for this step
+        # Most steps: λ * r_local only
+        # Interval-terminal steps: λ * r_local + r_global
+        # =====================================================================
+        reward = self.lambda_local * r_local + r_global
+
+        # =====================================================================
+        # 7. Handle post-transition setup
+        # =====================================================================
+        terminated = False
+
+        if transition == 'interval':
+            # =================================================================
+            # Set up the next remesh interval
+            # Thresholds computed from post-advance errors (correct timing)
+            # =================================================================
+            self._start_new_interval()
+
+        elif transition == 'done':
+            # =================================================================
+            # Episode complete — no more intervals
+            # =================================================================
+            terminated = True
+
+        # =====================================================================
+        # 8. Build observation for the next element (or zeros if done)
+        # =====================================================================
+        if terminated:
+            obs = np.zeros(self.observation_space.shape, dtype=np.float32)
+        else:
+            obs = self._build_observation(self.current_element_idx)
+
+        # =====================================================================
+        # 9. Update episode statistics
+        # =====================================================================
+        self._episode_steps += 1
+
+        # =====================================================================
+        # 10. Construct info dict with per-step diagnostics
+        # =====================================================================
+        info = {
+            # Action context
+            'element_id': pre_action_elem_id,
+            'action': exec_result['action_taken'],
+            'pre_action_error': float(pre_action_error),
+
+            # Mesh state
+            'n_active_pre': pre_action_n_active,
+            'n_active_post': exec_result['post_n_active'],
+            'n_cascade': len(exec_result['cascade_elements']),
+            'resource_usage': len(self.solver.active) / self.element_budget,
+
+            # Reward components
+            'r_local': r_local,
+            'r_global': r_global,
+            'reward': reward,
+
+            # Queue/transition state
+            'transition': transition,
+            'queue_skipped': queue_result['skipped'],
+            'remesh_step': self.remesh_step,
+            'round_number': self.round_number,
+            'episode_steps': self._episode_steps,
+        }
+
+        # =================================================================
+        # Append solver advance diagnostics on interval-terminal steps
+        # =================================================================
+        if solver_info:
+            info['solver_T'] = solver_info['T']
+            info['solver_n_steps'] = solver_info['n_steps']
+            info['solver_max_error_peak'] = solver_info['max_error_peak']
+
+        self._log(2, f"  → reward={reward:.4f} (λ*local={self.lambda_local * r_local:.4f}"
+                      f"{f', global={r_global:.4f}' if r_global != 0.0 else ''})")
+        self._log(2, f"  → transition={transition}, "
+                      f"n_active={len(self.solver.active)}")
+
+        return obs, reward, terminated, False, info
+
     def reset(
         self,
         seed: Optional[int] = None,
@@ -817,12 +1437,15 @@ class DGAMREnvMultiround(gym.Env):
 
         # =====================================================================
         # Build initial queue and set first element
-        # Queue is a list of indices into solver.active, sorted by
-        # priority magnitude (highest-impact elements first).
+        # Queue stores element IDs for stability across mesh changes.
+        # Resolve first element ID to active-array index for presentation.
         # =====================================================================
         self.queue = self._build_queue()
         self.queue_position = 0
-        self.current_element_idx = self.queue[0]
+        first_elem_id = self.queue[0]
+        self.current_element_idx = int(
+            np.where(self.solver.active == first_elem_id)[0][0]
+        )
 
         # =====================================================================
         # Build observation for the first element in the queue
