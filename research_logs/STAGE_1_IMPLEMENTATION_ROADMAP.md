@@ -2,8 +2,8 @@
 
 **Project:** DRL-AMR Stage 1 — Multi-Round Sequential Architecture  
 **Created:** 2026-03-24  
-**Last Updated:** 2026-03-29 (Phase 2 complete — all environment methods implemented)  
-**Status:** Phase 2 complete; Phase 3 next  
+**Last Updated:** 2026-03-30 (Phase 3 complete — training infrastructure operational)  
+**Status:** Phase 3 complete; Phase 4/4.5 next  
 **Authoritative Spec:** `strategy/proposals/Stage_1_Architecture_Specification.md`
 
 ---
@@ -42,8 +42,17 @@ This roadmap covers the implementation of Stage 1A (core architecture build) thr
 - `research_logs/STAGE_1_IMPLEMENTATION_ROADMAP.md` — this roadmap
 - `research_logs/EXP_LOG_S1_*.md` — Stage 1 experiment logs
 
+**New files** added during Phase 2.5:
+- `tests/multiround_buildout/smoke_test_multiround.py` — programmatic smoke test for multiround environment (all 18 methods)
+
 **New files** added during Phase 4.5:
 - `notebooks/interactive_amr_multiround_tester_code.py` — interactive Jupyter notebook tester for multiround environment (template: `notebooks/interactive_amr_testing_notebook_code.py`)
+
+**New files** added during Phase 3:
+- `experiments/train_multiround.py` — MaskablePPO training script with YAML config, CLI args, TensorBoard, checkpointing
+- `experiments/configs/multiround_default.yaml` — default training configuration
+- `numerical/callbacks/multiround_diagnostics.py` — custom SB3 callback (reward decomposition, action stats, 7-page PDF report)
+- `tests/multiround_buildout/debug_ppo_hang.py` — diagnostic script used to isolate training hang (throwaway)
 
 **New files** added during Phase 1:
 - `numerical/solvers/dg_advection_solver_multiround.py` — solver copy for multiround architecture
@@ -53,6 +62,7 @@ This roadmap covers the implementation of Stage 1A (core architecture build) thr
 **Modified files** (shared infrastructure):
 - `numerical/solvers/dg_advection_solver.py` — ~~max-over-interval tracking, balance hooks~~ no modifications needed (Task 1.1 absorbed into environment)
 - `numerical/amr/adapt.py` — periodic balance fix: added `periodic=True` flag to `check_balance()`, `balance_mark()`, `enforce_balance()`; fixed `check_balance()` to compare last-vs-first element for periodic domains
+- `numerical/solvers/dg_advection_solver_multiround.py` — (Session 7) removed steady_solve from reset()/init(); (Session 8) replaced `np.linalg.solve` with `np.linalg.lstsq` in `_update_matrices()` to fix macOS Accelerate hang
 
 **Old files left in place** (not deleted, not moved):
 - `numerical/environments/dg_amr_env.py` — reference for implementation patterns
@@ -280,13 +290,84 @@ This is the core implementation — `numerical/environments/dg_amr_env_multiroun
 - [ ] Test: 100 resets, verify all ICs are sampled approximately uniformly
 
 **Depends on:** Phase 1  
+**Blocks:** Phase 2.5
+
+---
+
+### Phase 2.5: Environment Smoke Test
+**Status:** Complete (2026-03-29, all 5 tasks pass)  
+**Estimated effort:** Part of 1 session (paired with start of Phase 3)  
+**Actual effort:** Part of 1 session (Session 6)  
+**Priority:** Must pass before any training infrastructure work
+
+Programmatic verification that all 18 environment methods work together correctly. Uses `verbosity=2` throughout for full step-level narrative. This catches structural bugs (crashes, shape mismatches, infinite loops, wrong transition counts, array index errors) before we build the training loop, where such bugs would be much harder to diagnose.
+
+**Test script location:** `tests/multiround_buildout/smoke_test_multiround.py`
+
+**Task 2.5.1: Single-episode verbose walkthrough**
+
+- [ ] Create solver and `DGAMREnvMultiround` with `verbosity=2`, `n_remesh=4`, `max_level=3`
+- [ ] Call `reset(options={'icase': 1})` — verify obs shape is `(8,)`, all values finite, info dict has expected keys
+- [ ] Step through at least 2 full remesh intervals with hand-chosen actions (mix of refine/coarsen/hold) — read verbosity=2 narrative to verify:
+  - Queue builds correctly (priorities logged, element IDs stable)
+  - Round transitions happen at expected counts (after all elements visited)
+  - Interval transitions trigger solver advance + global reward (check info dict: `transition='interval'`, `r_global` present, `solver_T` present)
+  - Observations are fresh at each step (resource_usage changes after refine/coarsen)
+  - Action masks update correctly (coarsen blocked at level 0, refine blocked at max_level)
+  - Cascade elements are tracked and skipped in queue
+- [ ] Verify episode terminates correctly after `n_remesh` intervals (`terminated=True`)
+- [ ] Print summary: total steps, steps per interval, rewards range
+
+**Task 2.5.2: Random-action stress test**
+
+- [ ] Loop over all 7 ICs: for each icase, run `reset(options={'icase': icase})` and verify no crash on reset
+- [ ] For each IC, step through a full episode with random valid actions (sample from masked action space using `action_masks()`)
+- [ ] Verify each episode terminates (no infinite loops)
+- [ ] Collect per-episode stats: total steps, final n_active, total local reward, total global reward, number of each action type
+- [ ] Print summary table across all 7 ICs
+
+**Task 2.5.3: Multi-episode stress test with random IC selection**
+
+- [ ] Run 100 episodes using the environment's built-in IC sampling (no `options={'icase': ...}` override)
+- [ ] Use `verbosity=0` for speed
+- [ ] Random valid actions throughout
+- [ ] Track which ICs were sampled (from `info['icase']` on reset) — verify all 7 appear at least once in 100 episodes
+- [ ] Verify no crashes, no NaN rewards, no infinite episodes
+- [ ] Print: episodes completed, IC distribution, mean/min/max episode length, mean/min/max episode return
+
+**Task 2.5.4: Transition count verification**
+
+- [ ] For one episode with known parameters (`n_remesh=4`, `max_level=3`), count:
+  - Total `'element'` transitions (should be ≈ `n_remesh × max_level × n_active` minus skipped elements)
+  - Total `'interval'` transitions (should be exactly `n_remesh - 1`)
+  - Total `'done'` transitions (should be exactly 1)
+  - Total round transitions (internal to `_advance_queue`, count via round_number changes in info dict — should be `n_remesh × (max_level - 1)`)
+- [ ] Print expected vs actual counts
+
+**Task 2.5.5: Reward sanity checks**
+
+- [ ] Verify local rewards are in expected range (not astronomically large or NaN)
+- [ ] Verify global rewards are ≤ 0 (penalty-only)
+- [ ] Verify global reward only appears on interval-terminal and done steps (check info dict `r_global != 0` only when `transition in ('interval', 'done')`)
+- [ ] Verify `reward == lambda_local * r_local + r_global` for every step (from info dict values)
+
+**Success criterion:** All tasks pass without crashes or assertion failures. The verbosity=2 narrative for Task 2.5.1 reads as a coherent step-by-step account of the episode with no suspicious jumps or missing transitions.
+
+**Implementation approach:**
+- Claude presents the test script one task at a time, researcher pastes and runs
+- If bugs are found, we fix the environment method before proceeding
+- Fixes follow the same workflow: Claude presents code block, researcher pastes
+- After all tests pass, commit the test script alongside any environment fixes
+
+**Depends on:** Phase 2  
 **Blocks:** Phase 3
 
 ---
 
 ### Phase 3: Training Infrastructure
-**Status:** Not Started  
-**Estimated effort:** 1–2 sessions
+**Status:** Complete (2026-03-30, all tasks pass)  
+**Estimated effort:** 1–2 sessions  
+**Actual effort:** 2 sessions (Session 7: code complete; Session 8: hang fix + smoke test pass)
 
 **Task 3.1: Training script**
 
@@ -321,7 +402,11 @@ This is the core implementation — `numerical/environments/dg_amr_env_multiroun
   - Can load checkpoint and resume training
 - [ ] Document any hyperparameter adjustments needed (e.g., n_steps, batch_size)
 
-**Depends on:** Phase 2  
+**Notes (2026-03-30) — Session 8 debugging and fix:**
+
+25. **macOS Accelerate `np.linalg.solve()` hang.** `_update_matrices()` calls `np.linalg.solve(M, R)` to compute `Dhat = M^{-1}(D - F)`. On macOS with the Accelerate BLAS backend, `linalg.solve()` can hang indefinitely on certain matrix configurations instead of raising `LinAlgError`. The mass matrix was not actually singular (no rank-deficiency warnings after fix), but the Accelerate code path entered a non-terminating state. Fix: replaced `np.linalg.solve(M, R)` with `np.linalg.lstsq(M, R, rcond=None)` which always returns. Added rank-deficiency diagnostic print. Same fix needed in `dg_advection_solver.py` and `dg_wave_solver_evaluation.py` before using those solvers on macOS. Stack trace captured using `faulthandler.dump_traceback()` via `threading.Timer` (30-second delayed dump) — `Ctrl+\` didn't work because GIL was held by the C extension.
+
+**Depends on:** Phase 2.5  
 **Blocks:** Phase 5
 
 ---
@@ -519,6 +604,9 @@ Systematic ablation sweeps. Each ablation is a separate experiment log.
 - Evaluation on held-out ICs not seen during training
 - Cross-resolution evaluation (different base element counts)
 
+**Prerequisites identified during Phase 3 (2026-03-30):**
+- Velocity variation requires adding `wave_speed` as an optional override parameter to the solver constructor, threaded through to `exact_solution()` and `eff()` in `utils.py`. Currently `wave_speed` is hardcoded at 2.0 inside `exact_solution()` and set as a side effect of `_initialize_solution()`. The solver, exact solution, and forcing must all use the same wave speed — if they diverge, error indicators become meaningless. The training config (`train_multiround.py`) already has a placeholder comment for this parameter.
+
 **Detailed task breakdown:** Created when Stage 1B is complete.
 
 ---
@@ -545,7 +633,8 @@ Systematic ablation sweeps. Each ablation is a separate experiment log.
 | S1-1.1 | Solver max-over-interval tracking | 1 | Absorbed into Phase 2 | Accumulator belongs in environment, not solver | — |
 | S1-1.2 | 2:1 balance enforcement validation | 1 | Complete | Cascades work; coarsen violations undone by enforce_balance; action masking confirmed | — |
 | S1-2.1 | New environment implementation | 2 | Complete (all methods) | Tasks 2.1–2.2: skeleton, observation. Tasks 2.3–2.4: action masking, action execution, verbosity, periodic balance fix. Tasks 2.5–2.6: priority queue (_build_queue), queue traversal (_advance_queue), solver advance (_advance_solver), local reward (_compute_local_reward), global reward (_compute_global_reward). Tasks 2.7–2.8: step() integration (linear orchestration), _advance_queue refactored to return transition signals, _start_new_interval extracted, IC sampling folded into reset(). | — |
-| S1-3.1 | Training infrastructure and smoke test | 3 | Not started | — | — |
+| S1-2.5.1 | Environment smoke test | 2.5 | Complete | All 5 tasks pass: verbose walkthrough, per-IC stress (7 ICs), 100-episode stress, transition counts exact, reward formula verified | — |
+| S1-3.1 | Training infrastructure and smoke test | 3 | Complete | Tasks 3.1–3.2 code complete (Session 7). Task 3.3 blocked by np.linalg.solve hang on macOS Accelerate — fixed with lstsq (Session 8). 10k smoke test: 78 episodes, 284 fps, diagnostics + PDF + checkpoints all verified. | — |
 | S1-4.1 | Threshold AMR baseline | 4 | Not started | — | — |
 | S1-4.5.1 | Interactive multiround tester | 4.5 | Not started | — | — |
 | S1-5.1 | Integration test and first training | 5 | Not started | — | — |
@@ -561,6 +650,9 @@ Systematic ablation sweeps. Each ablation is a separate experiment log.
 | 3 | 2026-03-27 | Phase 2 Tasks 2.3–2.4 + fixes | Tasks 2.3–2.4 complete, periodic balance fix, verbosity system | Action masking: _find_sibling, _can_coarsen (4-condition check with periodic wrap), action_masks. Action execution: _execute_action (separated action/balance for cascade tracking), _detect_cascade_elements. Verbosity: _log helper + logging in all completed methods. Fixed check_balance periodic wrap-around bug, added periodic flag to 3 balance functions. 5 implementation decisions documented (decisions 7–11). |
 | 4 | 2026-03-28 | Phase 2 Tasks 2.5–2.6 | Tasks 2.5–2.6 complete | Queue: _build_queue replaced stub with priority-magnitude sorting (element IDs for stability). _advance_queue handles round/interval/episode transitions with element ID resolution. Solver: _advance_solver with env-level CFL dt (no /2 margin), max-over-interval error accumulation. Reward: _compute_local_reward (classification table, takes pre-action error). _compute_global_reward (penalty-only, conditional guards on level). Removed redundant max_interval_errors reset from _advance_queue (owned by _advance_solver). 5 implementation decisions documented (decisions 12–16). |
 | 5 | 2026-03-29 | Phase 2 Tasks 2.7–2.8 (Phase 2 complete) | Tasks 2.7–2.8 complete, Phase 2 complete | Refactored _advance_queue() to return transition signals ('element'/'interval'/'done') instead of handling interval setup internally. Extracted _start_new_interval() — fixes threshold timing (post-advance errors). Implemented step() with flat linear orchestration. Task 2.8 folded into reset() (already implemented). Added Phase 4.5 (Interactive Multiround Tester) to roadmap as Phase 5 prerequisite. 5 implementation decisions documented (decisions 17–21). Phase 2 structurally complete: all 17+1 methods implemented (17 original + _start_new_interval). |
+| 6 | 2026-03-29 | Phase 2.5 Smoke Test | All 5 tasks pass | Smoke test script created at tests/multiround_buildout/smoke_test_multiround.py. Task 2.5.1: verbose walkthrough (163 steps, all transitions correct). Task 2.5.2: all 7 ICs complete full episodes with random actions. Task 2.5.3: 100 episodes, all ICs sampled (12–16 each), no crashes/NaN, mean length 152. Task 2.5.4: transition counts exact match (48 steps, 44 element, 3 interval, 1 done, 8 round advances). Task 2.5.5: reward formula verified to machine precision, global rewards ≤ 0, nonzero only on terminal steps. Roadmap path fixed (tests/env → tests/multiround_buildout). |
+| 7 | 2026-03-30 | Phase 3 Tasks 3.1–3.2 + smoke test attempt | Tasks 3.1–3.2 code complete; Task 3.3 blocked by hang | Training script (train_multiround.py), diagnostics callback (multiround_diagnostics.py), default YAML config created. Spec §4.1/§12.1 wave_speed corrected 1.0→2.0. Removed steady_solve_improved() from solver reset()/init() (was causing 3+ min hang, now 0.8ms). First PPO iteration runs at 541 fps but training hangs after iteration 1. Hang persists with callback disabled. Root cause TBD—likely in PPO update phase or MaskablePPO version issue. Stage 1C wave_speed prerequisite added. Solver audit task identified for pre-Phase 5. Implementation decisions 22–24 documented. |
+| 8 | 2026-03-30 | Phase 3 Task 3.3 — hang debugging + smoke test | Task 3.3 complete; Phase 3 complete | Training hang root cause: `np.linalg.solve()` in `_update_matrices()` hangs on macOS Accelerate BLAS backend instead of raising `LinAlgError`. Stack trace captured via `faulthandler.dump_traceback()` (threading.Timer approach — C-level dump_traceback_later not needed). Fix: replaced `np.linalg.solve(M, R)` with `np.linalg.lstsq(M, R, rcond=None)` + rank-deficiency warning. Verified: SB3 2.7.1 + sb3-contrib 2.7.1 (version match confirmed, not the issue). Standard PPO also hung (not MaskablePPO-specific). CartPole sanity check passed (SB3/PyTorch healthy). After fix: standard PPO 2k steps pass, MaskablePPO 2k steps pass, full 10k smoke test pass (78 episodes, 284 fps). All outputs verified: final_model.zip, checkpoint at 10k, monitor CSV (returns range -635 to -1717), training_diagnostics.json, training_report.pdf, tensorboard logs. Checkpoint load test passed. NOTE: same `np.linalg.solve` pattern exists in `dg_advection_solver.py` (original) and `dg_wave_solver_evaluation.py` (evaluation) — apply lstsq fix to both before using on macOS. Implementation decision 25 documented. |
 
 ---
 

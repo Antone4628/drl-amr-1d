@@ -232,14 +232,15 @@ class DGWaveSolverEvaluation:
             self.intma, self.nelem, self.npoin_dg, self.ngl, self.wave_speed
         )
         
-        try:
-            self.Dhat = np.linalg.solve(self.M, R)
-        except np.linalg.LinAlgError:
-            if self.verbose:
-                print("Matrix solve failed. Current mesh configuration:")
-                print(f"Number of elements: {self.nelem}")
-                print(f"Element sizes: {np.diff(self.xelem)}")
-            raise
+        # Solve M * Dhat = R for the combined operator
+        # Use lstsq instead of solve: on macOS Accelerate, solve() hangs
+        # on singular matrices instead of raising LinAlgError.
+        self.Dhat, residuals, rank, sv = np.linalg.lstsq(self.M, R, rcond=None)
+        if rank < self.M.shape[0]:
+            print(f"WARNING: Mass matrix rank-deficient ({rank}/{self.M.shape[0]})")
+            print(f"  nelem={self.nelem}, npoin_dg={self.npoin_dg}")
+            print(f"  Element sizes: {np.diff(self.xelem)}")
+            print(f"  Active elements: {self.active}")
 
     def get_current_max_refinement_level(self):
         """

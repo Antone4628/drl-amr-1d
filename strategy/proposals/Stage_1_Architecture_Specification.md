@@ -55,13 +55,15 @@ The remesh interval T is the time between adaptation opportunities. T >> dt, whe
 1. **Adaptation phase:** max_level rounds of sequential element processing (§5)
 2. **Solver phase:** Advance the PDE by T, taking multiple CFL sub-steps internally
 
-The existing `step_domain_fraction` parameter controls T by specifying what fraction of the domain the wave traverses per remesh interval. For the 1D system on [-1, 1] with wave speed c = 1:
+The existing `step_domain_fraction` parameter controls T by specifying what fraction of the domain the wave traverses per remesh interval. For the 1D system on [-1, 1] with wave speed c = 2 (hardcoded in `exact_solution()`; see §12.1):
 
-| step_domain_fraction | T (seconds) | CFL sub-steps (approx) |
-|---------------------|-------------|------------------------|
-| 0.025 | 0.05 | ~2 |
-| 0.05 | 0.10 | ~3 |
-| 0.1 | 0.20 | ~7 |
+| step_domain_fraction | T (seconds) | CFL sub-steps (approx, depends on mesh) |
+|---------------------|-------------|------------------------------------------|
+| 0.025 | 0.025 | ~2 |
+| 0.05 | 0.05 | ~3 |
+| 0.1 | 0.10 | ~5 |
+
+T = step_domain_fraction × domain_length / wave_speed = step_domain_fraction × 2 / 2.
 
 ### 4.2 Max-Over-Interval Error Tracking (D-008)
 
@@ -421,7 +423,7 @@ Including ICs with negative values is essential for breaking the u > 0 correlati
 | Base elements | 4 | Fixed (xelem = [-1, -0.4, 0, 0.4, 1]) |
 | Polynomial order (nop) | 4 | Fixed (D-009) |
 | max_level | 3 | Starting value for Stage 1A; revisitable |
-| Wave speed | 1.0 | Fixed for Stage 1A; variable in Stage 1C+ |
+| Wave speed | 2.0 | Hardcoded in `exact_solution()` as `u = w * x1 = 1 * 2`; fixed for Stage 1A. Stage 1C: add `wave_speed` as optional solver constructor override, threaded through `exact_solution()` and `eff()` |
 | CFL | 0.1 | From current codebase |
 | 2:1 balance | Enabled | Fixed (D-012) |
 

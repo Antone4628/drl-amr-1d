@@ -1,13 +1,14 @@
 # Project Tree
 
-Generated: 2026-01-30 09:23:18
+Generated: 2026-03-30 11:26:37
 Project: drl-amr-1d
-Included: all files
+Included: .md, .py, .yaml, .yml
 Data dirs: collapsed
 
 ```
 drl-amr-1d/
 ├── analysis/
+│   ├── data/ [2 dirs, 0 files]
 │   ├── model_performance/
 │   │   ├── comprehensive_analyzer.py
 │   │   ├── dg_wave_solver_evaluation.py
@@ -16,23 +17,28 @@ drl-amr-1d/
 │   │   ├── model_marker_evaluation.py
 │   │   ├── pareto_key_models_analyzer.py
 │   │   └── single_model_runner.py
+│   ├── multiround/
 │   ├── transferability/
 │   │   ├── animations/ [2 dirs, 0 files]
 │   │   ├── results/ [0 dirs, 0 files]
 │   │   ├── collect_results.py
 │   │   ├── generate_job_list.py
-│   │   ├── transferability_array.slurm
 │   │   ├── transferability_config.py
 │   │   └── transferability_runner.py
-│   └── verification/
-│       └── verify_eff_derivatives.py
+│   ├── verification/
+│   │   └── verify_eff_derivatives.py
+│   └── visualization/
+│       └── visualize_burnin.py
 ├── experiments/
 │   ├── configs/
-│   │   └── param_sweep/
-│   │       └── base_template.yaml
-│   └── run_experiments_mixed_gpu.py
+│   │   ├── param_sweep/
+│   │   │   └── base_template.yaml
+│   │   └── multiround_default.yaml
+│   ├── run_experiments_mixed_gpu.py
+│   └── train_multiround.py
+├── logs/ [1 dirs, 0 files]
 ├── notebooks/
-│   └── interactive_amr_testing_notebook.ipynb
+│   └── interactive_amr_testing_notebook_code.py
 ├── numerical/
 │   ├── amr/
 │   │   ├── __init__.py
@@ -42,6 +48,7 @@ drl-amr-1d/
 │   ├── callbacks/
 │   │   ├── __init__.py
 │   │   ├── enhanced_callback_data.py
+│   │   ├── multiround_diagnostics.py
 │   │   └── simple_monitor_callback.py
 │   ├── dg/
 │   │   ├── __init__.py
@@ -49,19 +56,42 @@ drl-amr-1d/
 │   │   └── matrices.py
 │   ├── environments/
 │   │   ├── __init__.py
-│   │   └── dg_amr_env.py
+│   │   ├── dg_amr_env.py
+│   │   └── dg_amr_env_multiround.py
 │   ├── grid/
 │   │   ├── __init__.py
 │   │   └── mesh.py
 │   ├── solvers/
 │   │   ├── __init__.py
 │   │   ├── dg_advection_solver.py
+│   │   ├── dg_advection_solver_multiround.py
+│   │   ├── error_indicators.py
 │   │   └── utils.py
 │   └── __init__.py
+├── research_logs/
+│   ├── 1D_EXPERIMENTS_ROADMAP.md
+│   ├── EXP_LOG_1_1_burnin_diagnostics.md
+│   ├── EXP_LOG_1_2_stopping_criterion.md
+│   └── STAGE_1_IMPLEMENTATION_ROADMAP.md
+├── results/ [7 dirs, 0 files]
 ├── slurm_scripts/
-│   └── batch_model_evaluation_template.slurm
+├── strategy/
+│   ├── decisions/
+│   │   ├── DECISION_LOG.md
+│   │   └── UNRESOLVED_DynAMO_Integration_2026-03-16.md
+│   ├── meetings/
+│   │   └── Advisor_Meeting_Brief_2026-03-09.md
+│   ├── proposals/
+│   │   ├── PhD_Research_Plan_Proposal.md
+│   │   └── Stage_1_Architecture_Specification.md
+│   └── references/
+│       ├── COMPETITIVE_LANDSCAPE.md
+│       ├── DYNAMO_TECHNICAL_REFERENCE.md
+│       ├── FOUCART_TECHNICAL_REFERENCE.md
+│       └── KOPERA_2014_TECHNICAL_REFERENCE.md
 ├── tests/
 │   ├── amr/
+│   │   ├── balance_test.py
 │   │   ├── test_adapt.py
 │   │   └── test_forest.py
 │   ├── analysis/
@@ -77,6 +107,9 @@ drl-amr-1d/
 │   ├── environments/
 │   │   ├── __init__.py
 │   │   └── test_dg_amr_env.py
+│   ├── multiround_buildout/
+│   │   ├── debug_ppo_hang.py
+│   │   └── smoke_test_multiround.py
 │   └── solvers/
 │       └── test_dg_advection_solver.py
 ├── tools/
@@ -85,8 +118,7 @@ drl-amr-1d/
 ├── create_batch_evaluation_jobs.py
 ├── create_data_export_scripts.py
 ├── PROJECT_TREE.md
-├── README.md
-└── requirements.txt
+└── README.md
 ```
 
 ---

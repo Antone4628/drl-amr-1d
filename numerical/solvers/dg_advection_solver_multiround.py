@@ -165,9 +165,6 @@ class DGAdvectionSolver:
         # Initialize forcing and DG operators
         self.f = self._initialize_forcing()
         self._update_matrices()
-        
-        # Solve for steady-state initial condition
-        self.q = self.steady_solve_improved()
 
     # =========================================================================
     # Initialization Methods
@@ -337,16 +334,26 @@ class DGAdvectionSolver:
         
         # Form RHS operator: D - F (differentiation minus flux)
         R = self.D - self.F
-        
+
         # Solve M * Dhat = R for the combined operator
-        try:
-            self.Dhat = np.linalg.solve(self.M, R)
-        except np.linalg.LinAlgError:
-            if self.verbose:
-                print("Matrix solve failed. Current mesh configuration:")
-                print(f"Number of elements: {self.nelem}")
-                print(f"Element sizes: {np.diff(self.xelem)}")
-            raise
+        # Use lstsq instead of solve: on macOS Accelerate, solve() hangs
+        # on singular matrices instead of raising LinAlgError.
+        self.Dhat, residuals, rank, sv = np.linalg.lstsq(self.M, R, rcond=None)
+        if rank < self.M.shape[0]:
+            print(f"WARNING: Mass matrix rank-deficient ({rank}/{self.M.shape[0]})")
+            print(f"  nelem={self.nelem}, npoin_dg={self.npoin_dg}")
+            print(f"  Element sizes: {np.diff(self.xelem)}")
+            print(f"  Active elements: {self.active}")
+        
+        # # Solve M * Dhat = R for the combined operator
+        # try:
+        #     self.Dhat = np.linalg.solve(self.M, R)
+        # except np.linalg.LinAlgError:
+        #     if self.verbose:
+        #         print("Matrix solve failed. Current mesh configuration:")
+        #         print(f"Number of elements: {self.nelem}")
+        #         print(f"Element sizes: {np.diff(self.xelem)}")
+        #     raise
 
     # =========================================================================
     # Query Methods
@@ -852,10 +859,6 @@ class DGAdvectionSolver:
         self._update_matrices()
         self._compute_timestep(use_actual_max_level=True)
         self.verify_state()
-        
-        # Solve for steady state
-        self._update_forcing()
-        self.q = self.steady_solve_improved()
         
         return self.q
 
