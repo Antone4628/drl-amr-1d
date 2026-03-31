@@ -154,7 +154,7 @@
 
 ### D-014: U-shaped priority queue replaces static descending-error queue
 **Date:** 2026-03-18  
-**Status:** Final (concept); pending detail resolution (metric definition, sub-round structure, termination condition)  
+**Status:** Superseded by D-017  
 **Source:** Phase 5 macro-planning session (2026-03-18), adaptation round mechanics discussion  
 **Decision:** Replace the static priority queue (descending error, processed once per round) with a U-shaped priority queue that is rebuilt from all active elements after every action. The U-shape captures urgency at both extremes: elements needing refinement (high error) and elements wasting resources (low error at high refinement level). No exclusion tracking is needed — the U-shape naturally handles bookkeeping after refinements, coarsenings, and cascades.  
 **Rationale:** Two fundamental problems with the static queue: (1) 2:1 balance cascades immediately invalidate the queue — entries reference elements that no longer exist, cascade-created children are missing, and priority ordering is stale. (2) A descending-error queue provides no entry point for coarsening — the agent never gets the opportunity to free budget by coarsening over-resolved elements. The U-shaped queue solves both problems and provides a natural termination signal (urgency drops below threshold at both ends).  
@@ -179,48 +179,6 @@
 **Decision:** The primary evaluation baseline for Stage 1B+ is conventional threshold-based AMR, not the old Masters thesis system (A2C + steady-solve + static queue). Internal ablations provide design validation.  
 **Rationale:** The old system's limitations are well-documented (steady-solve doesn't generalize, raw solution values cause spurious correlations, static queue can't handle cascades). Comparing against a known-broken baseline doesn't validate the new design. Threshold-based AMR is the conventional non-RL approach and the meaningful comparison: does the RL agent outperform a simple heuristic? The two-knob evaluation (α × budget) produces a 2D Pareto surface vs. threshold AMR's 1D curve.  
 **Implications:** Implement threshold-based AMR baseline using the same error indicator. Sweep threshold parameter to produce Pareto curve. Compare against RL agent's 2D Pareto surface.
-
----
-
-### D-013: Switch from A2C to PPO for Stage 1+
-**Date:** 2026-03-18  
-**Status:** Final  
-**Source:** Phase 5 macro-planning session (2026-03-18), dual reward design discussion  
-**Decision:** Use PPO (Proximal Policy Optimization) instead of A2C (Advantage Actor-Critic) for all training from Stage 1 onward. Both are available in SB3 with the same policy class and Gym interface.  
-**Rationale:** The dual reward structure (D-003, D-007) delivers a large global retrospective signal at the round-terminal step that must propagate backward to mid-round element decisions. PPO is the better fit for four practical reasons: (1) GAE is active by default (gae_lambda=0.95 vs. A2C's 1.0), providing the temporal smoothing needed for backward credit assignment. (2) Sample reuse — 10 gradient epochs per rollout, critical when each environment step is expensive. (3) Clipped surrogate objective prevents destructive policy updates. (4) Longer default rollouts (n_steps=2048) capture multiple complete rounds per rollout. DynAMO also uses PPO (via RLLib).  
-**Implications:** Replace A2C with PPO in all training scripts. Starting hyperparameters: lr=1e-4, n_steps=2048, batch_size=64, n_epochs=10, gamma=0.99, gae_lambda=0.95, ent_coef=0.01. Network: 2×256 FCNN with tanh (matching DynAMO). No new dependencies.
-
----
-
-### D-014: U-shaped priority queue replaces static descending-error queue
-**Date:** 2026-03-18  
-**Status:** Final (concept); pending detail resolution (metric definition, sub-round structure, termination condition)  
-**Source:** Phase 5 macro-planning session (2026-03-18), adaptation round mechanics discussion  
-**Decision:** Replace the static priority queue (descending error, processed once per round) with a U-shaped priority queue rebuilt from all active elements after every action. The U-shape captures urgency at both extremes: elements needing refinement (high error) and elements wasting resources (low error at high refinement level). No exclusion tracking needed — the U-shape naturally handles bookkeeping after refinements, coarsenings, and cascades.  
-**Rationale:** Two fundamental problems with the static queue: (1) 2:1 balance cascades immediately invalidate the queue — entries reference elements that no longer exist, cascade-created children are missing. (2) A descending-error queue provides no entry point for coarsening — the agent never gets the opportunity to free budget.  
-**Implications:** Each sub-round: rebuild U-queue → present element(s) → agent acts → execute + balance → repeat. Requires defining commensurable refine/coarsen urgency metrics, choosing sub-round structure, selecting termination condition. See U_Shaped_Queue_Proposal_2026-03-18.md.
-
----
-
-### D-015: No barrier function initially; α-scaled barrier as fallback
-**Date:** 2026-03-18  
-**Status:** Revisitable (pending Stage 1B assessment)  
-**Source:** Phase 5 macro-planning session (2026-03-18), dual reward design discussion  
-**Decision:** Do not include Foucart's barrier function B(p) in the initial Stage 1A implementation. If needed, reintroduce a barrier scaled by α rather than a separate γ_c parameter.  
-**Rationale:** Classification-based over-refinement penalty, hard budget constraint, and resource usage observation together replace the barrier's role. Adding a barrier creates competing signals. The α-scaled fallback keeps the system to one user-facing parameter.  
-**Implications:** Stage 1A reward is purely classification-based. γ_c is eliminated as a hyperparameter. Barrier is a Stage 1D ablation item if needed.
-
----
-
-### D-016: Threshold-based AMR as primary evaluation baseline
-**Date:** 2026-03-18  
-**Status:** Final  
-**Source:** Phase 5 macro-planning session (2026-03-18)  
-**Decision:** The primary evaluation baseline for Stage 1B+ is conventional threshold-based AMR, not the old Masters thesis system.  
-**Rationale:** The old system's limitations are well-documented. Comparing against a known-broken baseline doesn't validate the new design. Threshold-based AMR is the conventional non-RL approach and the meaningful comparison.  
-**Implications:** Implement threshold-based AMR baseline using the same error indicator. Sweep threshold to produce Pareto curve. Compare against RL agent's 2D Pareto surface (α × budget).
-
----
 
 ---
 
