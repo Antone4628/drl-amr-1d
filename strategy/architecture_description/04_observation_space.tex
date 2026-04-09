@@ -1,0 +1,234 @@
+\documentclass[11pt]{article}
+\usepackage[margin=0.85in]{geometry}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{amsmath, amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+
+% Colors
+\definecolor{episodecolor}{RGB}{70, 70, 70}
+\definecolor{intervalcolor}{RGB}{31, 119, 180}
+\definecolor{roundcolor}{RGB}{44, 160, 44}
+\definecolor{elementcolor}{RGB}{214, 39, 40}
+\definecolor{solvercolor}{RGB}{148, 103, 189}
+\definecolor{calloutcolor}{RGB}{255, 127, 14}
+\definecolor{dynamo}{RGB}{0, 120, 60}
+\definecolor{foucart}{RGB}{140, 60, 140}
+\definecolor{novel}{RGB}{200, 80, 0}
+
+\newcommand{\provdynamo}{\textcolor{dynamo}{\textsf{[DynAMO]}}}
+\newcommand{\provfoucart}{\textcolor{foucart}{\textsf{[Foucart]}}}
+\newcommand{\provnovel}{\textcolor{novel}{\textsf{[Novel]}}}
+\newcommand{\provboth}{\textcolor{dynamo}{\textsf{[DynAMO]}}\,/\,\textcolor{foucart}{\textsf{[Foucart]}}}
+
+\pagestyle{empty}
+
+\begin{document}
+
+\begin{center}
+{\Large\bfseries Observation Space}
+\end{center}
+
+\vspace{0.15cm}
+\noindent\textit{The observation is constructed fresh for each element as it is presented during an adaptation round. It is a flat vector of 8 scalars describing the element's local error state, mesh structure, and global context. A 9th component (propagation likelihood) is reserved for the 2D extension.}
+
+\vspace{0.15cm}
+\noindent\textit{Provenance key:}
+\provdynamo\ = adopted from Dzanic et al.\ (2024),\quad
+\provfoucart\ = adopted from Foucart et al.\ (2023),\quad
+\provnovel\ = novel to this architecture.
+
+% ============================================================
+% SUMMARY TABLE
+% ============================================================
+\vspace{0.4cm}
+\noindent\textbf{Component Summary}
+
+\vspace{0.2cm}
+\begin{center}
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{c l c c l}
+\toprule
+\# & Component & Range & Dim & Provenance \\
+\midrule
+0 & $\alpha$-normalized error & $[0, \infty)$ & 1 & \provdynamo \\
+1 & Left neighbor error & $[0, \infty)$ & 1 & \provboth \\
+2 & Right neighbor error & $[0, \infty)$ & 1 & \provboth \\
+3 & Refinement level & $[0, 1]$ & 1 & \provnovel \\
+4 & Left neighbor level & $[0, 1]$ & 1 & \provnovel \\
+5 & Right neighbor level & $[0, 1]$ & 1 & \provnovel \\
+6 & Resource usage & $[0, 2]$ & 1 & \provfoucart \\
+7 & Round progress & $[0, 1]$ & 1 & \provnovel \\
+\midrule
+8 & \textit{Propagation likelihood} & \textit{---} & \textit{---} & \textit{\provdynamo\ (deferred to 2D)} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ============================================================
+% ERROR INDICATOR
+% ============================================================
+\vspace{0.5cm}
+\noindent\textbf{The Error Indicator $e_k$}
+
+\vspace{0.15cm}
+\noindent The raw error indicator for element $k$ is the \textbf{average boundary jump magnitude} --- the mean absolute solution discontinuity at the element's two interfaces:
+\begin{equation}
+e_k \;=\; \frac{1}{2}\Big(\big|\,u_h^{(k)}(x_L) - u_h^{(k-1)}(x_L)\,\big| \;+\; \big|\,u_h^{(k)}(x_R) - u_h^{(k+1)}(x_R)\,\big|\Big)
+\label{eq:error}
+\end{equation}
+where $u_h^{(k)}(x_L)$ is the solution evaluated at element $k$'s left boundary from within element $k$, and $u_h^{(k-1)}(x_L)$ is the solution at the same point evaluated from within the left neighbor. The superscripts denote which element's polynomial is being evaluated, not function powers.
+
+For the DG method, the exact solution is continuous, so any nonzero interface jump is a measure of discretization error. An element that needs refinement will have large jumps at its boundaries; a well-resolved element will have jumps near zero. This indicator is in the same family as Foucart's boundary non-conformity $\gamma_K$ and DynAMO's ZZ-type error estimator, simplified to raw jump magnitude for the 1D case.
+
+% ============================================================
+% ALPHA NORMALIZATION
+% ============================================================
+\vspace{0.5cm}
+\noindent\textbf{$\alpha$-Normalization (Components 0--2)} \provdynamo
+
+\vspace{0.15cm}
+\noindent The raw error $e_k$ varies across many orders of magnitude depending on mesh resolution and waveform. To make the observation scale-invariant, we apply the $\alpha$-normalized log-error transformation from DynAMO (Eq.~15):
+\begin{equation}
+\boxed{\;o_k \;=\; \frac{-\log_{10}(e_k)}{\log_{10}(\alpha \cdot \|e\|_\infty)}\;}
+\label{eq:alpha_norm}
+\end{equation}
+where:
+\begin{itemize}[leftmargin=1.5em, itemsep=3pt]
+    \item $e_k$ is the element's raw error indicator (Eq.~\ref{eq:error}),
+    \item $\|e\|_\infty = \max_j \, e_j$ is the maximum error across all active elements,
+    \item $\alpha \in (0, 1)$ is the error tolerance parameter (fixed at $\alpha_{\text{train}} = 0.1$ during training).
+\end{itemize}
+
+\noindent\textit{Why this works.} Both numerator and denominator are in log-space relative to the global maximum error, so the observation is insensitive to absolute error magnitude and mesh resolution. The agent sees \textit{relative} error position within the current mesh, not absolute values.
+
+\vspace{0.2cm}
+\noindent\textit{The decision boundary.} Values cluster around 1.0 at the classification threshold. To see why, note that the refinement threshold is $e_{\max} = \alpha \cdot \|e\|_\infty$. When $e_k = e_{\max}$:
+\[
+o_k = \frac{-\log_{10}(\alpha \cdot \|e\|_\infty)}{\log_{10}(\alpha \cdot \|e\|_\infty)} = 1.0
+\]
+So $o_k > 1$ means the element's error is above the refinement threshold (refinement candidate), and $o_k < 1$ means it's below. The agent learns to act on this natural boundary.
+
+\vspace{0.2cm}
+\noindent\textit{Edge case.} When $e_k = 0$ (or the denominator is zero), the value is clamped using a machine-epsilon floor: $e_k \leftarrow \max(e_k, \, \varepsilon)$ with $\varepsilon = 10^{-30}$.
+
+% ============================================================
+% COMPONENT DETAILS: ERROR GROUP
+% ============================================================
+\vspace{0.5cm}
+\noindent\textbf{Components 0--2: Error Information}
+
+\vspace{0.2cm}
+\noindent\textbf{Component 0: Element error} \provdynamo
+\[
+o_0 = \frac{-\log_{10}(e_k)}{\log_{10}(\alpha \cdot \|e\|_\infty)}
+\]
+The $\alpha$-normalized error for the current element. This is the primary signal the agent uses to decide whether the element needs refinement or coarsening.
+
+\vspace{0.3cm}
+\noindent\textbf{Component 1: Left neighbor error} \provboth
+\[
+o_1 = \frac{-\log_{10}(e_{k-1})}{\log_{10}(\alpha \cdot \|e\|_\infty)}
+\]
+The same $\alpha$-normalized error, evaluated for the left neighbor. In the periodic domain, the leftmost element's left neighbor is the rightmost element. Adopted from Foucart's Component A (neighbor boundary jumps provide spatial context), using DynAMO's normalization.
+
+\vspace{0.3cm}
+\noindent\textbf{Component 2: Right neighbor error} \provboth
+\[
+o_2 = \frac{-\log_{10}(e_{k+1})}{\log_{10}(\alpha \cdot \|e\|_\infty)}
+\]
+Same as above for the right neighbor. The neighbor errors provide spatial context: the agent can assess whether the current element is a local error peak or part of a broader high-error region.
+
+% ============================================================
+% COMPONENT DETAILS: MESH STRUCTURE GROUP
+% ============================================================
+\vspace{0.5cm}
+\noindent\textbf{Components 3--5: Mesh Structure} \provnovel
+
+\vspace{0.15cm}
+\noindent Neither DynAMO nor Foucart includes refinement level in the observation. DynAMO deliberately excludes it --- their single-level architecture makes it unnecessary. We include it because the agent needs to predict cascade costs: refining an element whose neighbor is two levels coarser will trigger a cascade, and the level difference between neighbors is the signal for this.
+
+\vspace{0.2cm}
+\noindent\textbf{Component 3: Element refinement level}
+\[
+o_3 = \frac{\ell_k}{\ell_{\max}}
+\]
+where $\ell_k$ is the current refinement level of element $k$ and $\ell_{\max}$ is \texttt{max\_level}. Normalized to $[0, 1]$.
+
+\vspace{0.3cm}
+\noindent\textbf{Component 4: Left neighbor refinement level}
+\[
+o_4 = \frac{\ell_{k-1}}{\ell_{\max}}
+\]
+
+\vspace{0.3cm}
+\noindent\textbf{Component 5: Right neighbor refinement level}
+\[
+o_5 = \frac{\ell_{k+1}}{\ell_{\max}}
+\]
+
+\noindent Together, components 3--5 let the agent compute level differences between the current element and its neighbors, which is the information needed to anticipate whether an action will trigger a 2:1 balance cascade.
+
+% ============================================================
+% COMPONENT DETAILS: GLOBAL CONTEXT GROUP
+% ============================================================
+\vspace{0.5cm}
+\noindent\textbf{Components 6--7: Global Context}
+
+\vspace{0.2cm}
+\noindent\textbf{Component 6: Resource usage} \provfoucart
+\[
+o_6 = \frac{|\mathcal{A}|}{B}
+\]
+where $|\mathcal{A}|$ is the number of currently active elements and $B$ is the element budget. Adapted from Foucart's Component C, which communicates global resource state to local decisions. Without this, the agent would have no way to gauge how close it is to the budget constraint.
+
+Values above 1.0 are possible after cascades --- a refinement that triggers a cascade can push the mesh over budget. This is informative: the agent observes that the mesh is over-budget and can adjust subsequent decisions accordingly.
+
+\vspace{0.3cm}
+\noindent\textbf{Component 7: Round progress} \provnovel
+\[
+o_7 = \frac{r}{R}
+\]
+where $r$ is the current round number (1-indexed) and $R$ is the total number of rounds per remesh interval ($= \ell_{\max}$). This tells the agent where it is in the multi-round adaptation process. In early rounds, further refinement is still possible in later rounds; in the final round, the current decisions are the last opportunity before the solver advances.
+
+% ============================================================
+% DEFERRED COMPONENT
+% ============================================================
+\vspace{0.5cm}
+\noindent\textbf{Component 8 (Deferred): Propagation Likelihood} \provdynamo
+
+\vspace{0.15cm}
+\noindent DynAMO's most distinctive observation feature: a non-dimensional quantity estimating the likelihood that a feature in a neighboring element will propagate to the current element within the remesh interval. For 1D constant-velocity advection, this quantity is constant for all element pairs and provides no discriminative information, so it is deferred until the system expands to 2D or variable-velocity problems where it becomes meaningful.
+
+% ============================================================
+% ALPHA COUPLING
+% ============================================================
+\vspace{0.5cm}
+\noindent\textbf{The $\alpha$-Coupling Mechanism}
+
+\vspace{0.15cm}
+\noindent The same parameter $\alpha$ appears in two places: the observation normalization (Eq.~\ref{eq:alpha_norm}) and the reward classification thresholds ($e_{\max} = \alpha \cdot \|e\|_\infty$). During training, $\alpha$ is fixed at 0.1 and the agent learns a policy conditioned on what it sees through that lens. 
+
+At evaluation time, $\alpha$ can be freely varied without retraining. Changing $\alpha$ simultaneously shifts both what the agent ``sees'' and what it would be ``judged by'':
+\begin{itemize}[leftmargin=1.5em, itemsep=3pt]
+    \item \textbf{Smaller $\alpha$} $\to$ the denominator in Eq.~\ref{eq:alpha_norm} decreases $\to$ normalized errors increase $\to$ more elements appear to be above the decision boundary $\to$ the agent refines more aggressively.
+    \item \textbf{Larger $\alpha$} $\to$ the denominator increases $\to$ normalized errors decrease $\to$ fewer elements appear above the boundary $\to$ the agent refines less.
+\end{itemize}
+This gives a single knob to sweep the accuracy--cost tradeoff at deployment time: one trained policy produces a family of behaviors parameterized by $\alpha$. Combined with sweeping the element budget (a second knob), this generates a 2D Pareto surface of accuracy versus cost.
+
+% ============================================================
+% KEY POINTS
+% ============================================================
+\vspace{0.5cm}
+\noindent\textbf{Key Points}
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=4pt]
+    \item \textbf{Scale invariance through $\alpha$-normalization.} The agent sees relative error position, not absolute magnitudes. The same policy works across different mesh resolutions and error scales.
+    \item \textbf{Decision boundary at $o = 1.0$.} The normalization is designed so that the refinement threshold maps exactly to $o = 1$, giving the agent a natural, learnable boundary.
+    \item \textbf{Refinement levels are novel and cascade-motivated.} DynAMO excludes level information; we include it because multi-level refinement with 2:1 balance makes cascade prediction essential.
+    \item \textbf{No raw solution values.} The original Masters thesis included solution values at LGL nodes, which caused a spurious correlation (the agent learned to refine where $u > 0$ rather than where gradients were steep). These are deliberately excluded.
+    \item \textbf{One trained policy, many behaviors.} The $\alpha$-coupling lets a single trained agent produce a range of refinement strategies at deployment without retraining.
+\end{enumerate}
+
+\end{document}
