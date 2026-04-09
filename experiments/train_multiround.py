@@ -80,6 +80,7 @@ DEFAULT_CONFIG = {
         'n_remesh': 4,                   # Remesh intervals per episode (D-027)
         'step_domain_fraction': 0.05,    # Wave travel per interval (Spec §4.1)
         'initial_refinement_level': 0,   # 0 = start from base mesh
+        'pre_advance_range': [0.6, 1.4], # D-029: pre-episode advance (multiples of T)
         'ic_pool': [1, 10, 12, 13, 14, 15, 16],  # Multi-IC pool (Spec §11.1)
         'verbosity': 0,                  # 0=silent for training
     },
@@ -242,6 +243,7 @@ def create_env(config: dict, seed: int, log_dir: str = None) -> Monitor:
         n_remesh=env_cfg['n_remesh'],
         step_domain_fraction=env_cfg['step_domain_fraction'],
         initial_refinement_level=env_cfg['initial_refinement_level'],
+        pre_advance_range=tuple(env_cfg['pre_advance_range']),
         ic_pool=env_cfg['ic_pool'],
         verbosity=env_cfg['verbosity'],
     )

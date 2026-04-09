@@ -95,6 +95,7 @@ class DGAMREnvMultiround(gym.Env):
         n_remesh: int = 4,
         step_domain_fraction: float = 0.05,
         initial_refinement_level: int = 0,
+        pre_advance_range: Tuple[float, float] = (0.6, 1.4),
         ic_pool: Optional[List[int]] = None,
         verbosity: int = 0,
     ):
@@ -139,6 +140,13 @@ class DGAMREnvMultiround(gym.Env):
                 1 = one pass (8 elements), 2 = two passes (16 elements).
                 Can be overridden per-episode via options['refinement_level'].
                 Default 0 — agent builds resolution from scratch.
+            pre_advance_range: Range (low, high) for randomized pre-episode
+                solver advance as multiples of one remesh interval T (D-029).
+                After IC initialization, the solver advances by a random
+                duration in [low*T, high*T] to develop discretization errors
+                before the agent's first observation. Set to (0.0, 0.0) to
+                disable. Set to (1.0, 1.0) for deterministic single-T advance.
+                Uses Gymnasium-seeded RNG for reproducibility.
             ic_pool: List of icase identifiers for IC sampling at episode
                 start. If None, uses full Stage 1A pool:
                 [1, 10, 12, 13, 14, 15, 16]. Includes ICs with negative
@@ -168,6 +176,7 @@ class DGAMREnvMultiround(gym.Env):
         self.element_budget = element_budget
         self.step_domain_fraction = step_domain_fraction
         self.initial_refinement_level = initial_refinement_level
+        self.pre_advance_range = pre_advance_range
 
         # =====================================================================
         # IC sampling pool 
@@ -1405,6 +1414,40 @@ class DGAMREnvMultiround(gym.Env):
             )
         else:
             self.solver.reset(icase=icase)
+
+        # =====================================================================
+        # D-029: Pre-episode solver advance
+        # At t=0, the IC is projected exactly onto LGL nodes, producing
+        # zero boundary jumps → degenerate thresholds, queue, and rewards
+        # for the entire first remesh interval. Advancing the solver by
+        # a randomized duration develops genuine discretization errors
+        # before the agent's first observation.
+        #
+        # Duration = uniform(low, high) * T, where T is one remesh interval.
+        # Uses Gymnasium-seeded RNG (self.np_random) for reproducibility.
+        # Set pre_advance_range = (0.0, 0.0) to disable.
+        # =====================================================================
+        low, high = self.pre_advance_range
+        if high > 0:
+            domain_length = self.solver.xelem[-1] - self.solver.xelem[0]
+            T = self.step_domain_fraction * domain_length / self.solver.wave_speed
+            multiplier = float(self.np_random.uniform(low, high))
+            advance_duration = multiplier * T
+
+            dx_min = np.min(np.diff(self.solver.xelem))
+            dt = self.solver.courant_max * dx_min / self.solver.wave_speed
+
+            time_advanced = 0.0
+            while time_advanced < advance_duration - 1e-15:
+                step_dt = min(dt, advance_duration - time_advanced)
+                self.solver.step(dt=step_dt)
+                time_advanced += step_dt
+
+            self._log(2, f"  D-029 pre-advance: {multiplier:.3f} * T = "
+                          f"{advance_duration:.6f}s "
+                          f"({int(np.ceil(advance_duration / dt))} steps)")
+            self._log(2, f"  Solver time after pre-advance: "
+                          f"{self.solver.time:.6f}")
 
         # =====================================================================
         # Compute initial error indicators and thresholds (Spec §9)

@@ -303,7 +303,17 @@
 
 ---
 
-## Pending Decisions (Updated 2026-03-24)
+### D-029: Pre-episode solver advance to resolve zero-error initialization
+**Date:** 2026-04-07  
+**Status:** Final  
+**Source:** Architecture description session (2026-04-07); advisor discussion re: zero-error initialization  
+**Decision:** At the start of each episode, after initializing the level-1 mesh and projecting the IC, advance the solver by a randomized duration sampled from [0.6T, 1.4T] before computing thresholds, building the queue, or presenting the first observation. Implemented as a modification to `reset()` in `dg_amr_env_multiround.py`. The advance duration multiplier is sampled from `self.np_random.uniform(0.6, 1.4)` for reproducibility under Gymnasium seeding. A constructor parameter `pre_advance_range=(0.6, 1.4)` controls the range; set to `(0.0, 0.0)` to disable, `(1.0, 1.0)` for deterministic.  
+**Rationale:** At t=0 the IC is projected exactly onto the LGL nodes, producing zero boundary jumps (zero error indicators) for all elements. This means thresholds are zero, all elements are classified as neutral, the queue has no priority differentiation, and the observation is degenerate. The agent would fly blind for the entire first remesh interval (max_level rounds). Advancing the solver allows discretization error to develop naturally at element interfaces. Per advisor: the agent should be able to assess and improve a mesh at any point in a simulation — starting at t=0 with exact nodal projection is an artificial degenerate case, not a meaningful training scenario. The randomized multiplier adds implicit diversity: same IC shape yields different spatial positions and error distributions across episodes.  
+**Implications:** Modifies `reset()` in the environment (Phase 2 amendment). Must be implemented before first real training runs (Phase 5). The interactive multiround tester (Phase 4.5) confirmed the zero-error issue. Episode total simulation time increases by ~T (from N_remesh×T to ~T + N_remesh×T). Wave position at episode start is no longer centered, adding spatial diversity. Demo/evaluation scripts should use `pre_advance_range=(1.0, 1.0)` for deterministic reproducibility.
+
+---
+
+## Pending Decisions (Updated 2026-04-07)
 
 | ID | Topic | Blocking | Target Resolution |
 |----|-------|----------|-------------------|

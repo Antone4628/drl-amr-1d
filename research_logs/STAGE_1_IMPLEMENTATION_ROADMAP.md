@@ -2,8 +2,8 @@
 
 **Project:** DRL-AMR Stage 1 — Multi-Round Sequential Architecture  
 **Created:** 2026-03-24  
-**Last Updated:** 2026-03-30 (Phase 3 complete — training infrastructure operational)  
-**Status:** Phase 3 complete; Phase 4/4.5 next  
+**Last Updated:** 2026-04-09 (D-029 implemented and verified; Phase 4.5 fully complete)  
+**Status:** D-029 implemented; Phase 5 (first real training) and Phase 4 (threshold baseline) next  
 **Authoritative Spec:** `strategy/proposals/Stage_1_Architecture_Specification.md`
 
 ---
@@ -444,7 +444,7 @@ Implement the conventional threshold-based AMR baseline (D-016) that serves as t
 ---
 
 ### Phase 4.5: Interactive Multiround Tester
-**Status:** Not Started  
+**Status:** Complete (2026-04-09, all tasks done; D-029 verified via interactive tester)  
 **Estimated effort:** 1 session  
 **Priority:** Build before Phase 5 integration testing — serves as the primary manual verification tool
 
@@ -636,8 +636,9 @@ Systematic ablation sweeps. Each ablation is a separate experiment log.
 | S1-2.5.1 | Environment smoke test | 2.5 | Complete | All 5 tasks pass: verbose walkthrough, per-IC stress (7 ICs), 100-episode stress, transition counts exact, reward formula verified | — |
 | S1-3.1 | Training infrastructure and smoke test | 3 | Complete | Tasks 3.1–3.2 code complete (Session 7). Task 3.3 blocked by np.linalg.solve hang on macOS Accelerate — fixed with lstsq (Session 8). 10k smoke test: 78 episodes, 284 fps, diagnostics + PDF + checkpoints all verified. | — |
 | S1-4.1 | Threshold AMR baseline | 4 | Not started | — | — |
-| S1-4.5.1 | Interactive multiround tester | 4.5 | Not started | — | — |
-| S1-5.1 | Integration test and first training | 5 | Not started | — | — |
+| S1-4.5.1 | Interactive multiround tester | 4.5 | Complete | Notebook built: 6 cells, InteractiveMultiroundTester class, ipywidgets UI, 4-row visualization (mesh/solution/error classification/history), queue priority display, action masking, auto-complete round/interval, settings panel. Zero-error initialization discovered — all errors zero at t=0 due to exact nodal IC interpolation (not L2 projection). Led to D-029 (pre-episode solver advance). D-029 implemented and verified 2026-04-09: non-zero thresholds (e_max≈4.98e-03, e_min≈1.72e-03), mixed zone classification (3 UNDER, 4 OVER, 1 NEUTRAL on Gaussian IC), priority-magnitude queue ordering validated. | — |
+| S1-5.1 | Integration test and first training | 5 | Not started (unblocked) | D-029 complete; ready for Phase 5 | — |
+| S1-D029 | Pre-episode solver advance | D-029 | Complete | Implemented in reset(): randomized [0.6T, 1.4T] pre-advance after IC initialization. Constructor parameter pre_advance_range=(0.6, 1.4). Threaded through YAML config and train_multiround.py. Verified via interactive tester: non-zero errors, meaningful thresholds, mixed classification, non-trivial queue ordering. | — |
 
 ---
 
@@ -653,6 +654,8 @@ Systematic ablation sweeps. Each ablation is a separate experiment log.
 | 6 | 2026-03-29 | Phase 2.5 Smoke Test | All 5 tasks pass | Smoke test script created at tests/multiround_buildout/smoke_test_multiround.py. Task 2.5.1: verbose walkthrough (163 steps, all transitions correct). Task 2.5.2: all 7 ICs complete full episodes with random actions. Task 2.5.3: 100 episodes, all ICs sampled (12–16 each), no crashes/NaN, mean length 152. Task 2.5.4: transition counts exact match (48 steps, 44 element, 3 interval, 1 done, 8 round advances). Task 2.5.5: reward formula verified to machine precision, global rewards ≤ 0, nonzero only on terminal steps. Roadmap path fixed (tests/env → tests/multiround_buildout). |
 | 7 | 2026-03-30 | Phase 3 Tasks 3.1–3.2 + smoke test attempt | Tasks 3.1–3.2 code complete; Task 3.3 blocked by hang | Training script (train_multiround.py), diagnostics callback (multiround_diagnostics.py), default YAML config created. Spec §4.1/§12.1 wave_speed corrected 1.0→2.0. Removed steady_solve_improved() from solver reset()/init() (was causing 3+ min hang, now 0.8ms). First PPO iteration runs at 541 fps but training hangs after iteration 1. Hang persists with callback disabled. Root cause TBD—likely in PPO update phase or MaskablePPO version issue. Stage 1C wave_speed prerequisite added. Solver audit task identified for pre-Phase 5. Implementation decisions 22–24 documented. |
 | 8 | 2026-03-30 | Phase 3 Task 3.3 — hang debugging + smoke test | Task 3.3 complete; Phase 3 complete | Training hang root cause: `np.linalg.solve()` in `_update_matrices()` hangs on macOS Accelerate BLAS backend instead of raising `LinAlgError`. Stack trace captured via `faulthandler.dump_traceback()` (threading.Timer approach — C-level dump_traceback_later not needed). Fix: replaced `np.linalg.solve(M, R)` with `np.linalg.lstsq(M, R, rcond=None)` + rank-deficiency warning. Verified: SB3 2.7.1 + sb3-contrib 2.7.1 (version match confirmed, not the issue). Standard PPO also hung (not MaskablePPO-specific). CartPole sanity check passed (SB3/PyTorch healthy). After fix: standard PPO 2k steps pass, MaskablePPO 2k steps pass, full 10k smoke test pass (78 episodes, 284 fps). All outputs verified: final_model.zip, checkpoint at 10k, monitor CSV (returns range -635 to -1717), training_diagnostics.json, training_report.pdf, tensorboard logs. Checkpoint load test passed. NOTE: same `np.linalg.solve` pattern exists in `dg_advection_solver.py` (original) and `dg_wave_solver_evaluation.py` (evaluation) — apply lstsq fix to both before using on macOS. Implementation decision 25 documented. |
+| 9 | 2026-04-07 | Phase 4.5 — Interactive Multiround Tester | Tasks 4.5.1–4.5.3 complete; Task 4.5.4 deferred to post-D-029 | Built `notebooks/interactive_amr_multiround_tester_code.py` (6 cells, ~600 lines). Class split across cells: Cell 2 (infrastructure: __init__, create_environment, setup_widgets, utilities), Cell 3 (action handlers: on_step, on_auto_complete_round/interval, on_reset, on_apply_settings), Cell 4 (visualization: render, 6 plot methods, show_tester). Features: queue priority table with error/classification display, HTML status bar with action mask indicators, error classification plot with α-based thresholds, dual reward visualization (λ·local + global stacked bars), round/interval boundary markers in history plots, auto-complete with verbosity suppression, icase dropdown + initial_refinement_level slider. Initial test confirmed zero-error initialization — `_initialize_solution()` uses nodal interpolation (not L2 projection), producing zero boundary jumps at t=0. Discussed with advisor → D-029 (pre-episode solver advance). Task 4.5.4 verification deferred until D-029 provides non-zero initial errors for meaningful testing. |
+| 10 | 2026-04-09 | D-029 Implementation + Phase 4.5 completion | D-029 implemented and verified; Phase 4.5 fully complete | Implemented pre-episode solver advance (D-029) in reset(): 3 code changes (constructor parameter, reset() insertion, YAML + training script threading). Verified via interactive tester: Gaussian IC shows e_max≈4.98e-03, e_min≈1.72e-03, mixed classification (3 UNDER near pulse, 4 OVER in flat regions, 1 NEUTRAL), priority-magnitude queue validated (far-OVER elements sort to top with priority ~2.9). Phase 4.5 Task 4.5.4 confirmed complete. Phase 5 unblocked. |
 
 ---
 
@@ -674,3 +677,4 @@ Decisions are tracked in `strategy/decisions/DECISION_LOG.md`. The following are
 | D-026 | 9-component observation (7 + resource + round) | Observation space definition |
 | D-027 | N_remesh = 4 | Episode structure |
 | D-028 | Priority-magnitude ordering, no interleaving | Queue construction |
+| D-029 | Pre-episode solver advance (randomized [0.6T, 1.4T]) | Modifies reset() — must be done before Phase 5 |
