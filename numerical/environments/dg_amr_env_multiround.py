@@ -92,6 +92,7 @@ class DGAMREnvMultiround(gym.Env):
         p_or: float = 5.0,
         p_cr: float = 2.0,
         lambda_local: float = 0.1,
+        lambda_global: float = 1.0,
         n_remesh: int = 4,
         step_domain_fraction: float = 0.05,
         initial_refinement_level: int = 0,
@@ -129,6 +130,11 @@ class DGAMREnvMultiround(gym.Env):
             lambda_local: Weighting factor for local shaping reward.
                 Step reward = λ * r_local on most steps, and
                 λ * r_local + r_global on remesh-interval-terminal steps.
+            lambda_global: Weighting factor for global retrospective reward.
+                Scales r_global independently of r_local. Default 1.0 matches
+                the pre-Phase-5.5 behavior where global reward was delivered
+                unscaled. Phase 5.5 (D-030) introduces this as infrastructure
+                for reward tuning experiments.
             n_remesh: Number of remesh intervals per episode (D-027).
                 Each interval = max_level adaptation rounds + solver advance.
                 Total decisions ≈ n_remesh x max_level x n_active.
@@ -168,6 +174,7 @@ class DGAMREnvMultiround(gym.Env):
         self.p_or = p_or
         self.p_cr = p_cr
         self.lambda_local = lambda_local
+        self.lambda_global = lambda_global
 
         # =====================================================================
         # Episode structure parameters 
@@ -982,10 +989,18 @@ class DGAMREnvMultiround(gym.Env):
             else:
                 n_ok += 1
 
-        reward = -total_penalty
+        # =====================================================================
+        # G1 (D-030): Normalize by n_active to remove minimum-mesh attractor
+        # Without normalization, r_global = -Σ(penalty_k) strictly increases
+        # (toward zero) as n_active decreases, creating a structural incentive
+        # to coarsen everything. Dividing by n_active makes r_global measure
+        # the average per-element mesh quality instead of total penalty mass.
+        # =====================================================================
+        reward = -total_penalty / n_active if n_active > 0 else 0.0
 
         self._log(1, f"  Global reward: {reward:.4f} "
-                      f"(under={n_under}, over={n_over}, ok={n_ok})")
+                      f"(under={n_under}, over={n_over}, ok={n_ok}, "
+                      f"n_active={n_active})")
         self._log(2, f"    Thresholds: e_max={self.e_max:.6f}, "
                       f"e_min={self.e_min:.6f}")
 
@@ -1280,7 +1295,7 @@ class DGAMREnvMultiround(gym.Env):
         # Most steps: λ * r_local only
         # Interval-terminal steps: λ * r_local + r_global
         # =====================================================================
-        reward = self.lambda_local * r_local + r_global
+        reward = self.lambda_local * r_local + self.lambda_global * r_global
 
         # =====================================================================
         # 7. Handle post-transition setup
@@ -1349,8 +1364,8 @@ class DGAMREnvMultiround(gym.Env):
             info['solver_n_steps'] = solver_info['n_steps']
             info['solver_max_error_peak'] = solver_info['max_error_peak']
 
-        self._log(2, f"  → reward={reward:.4f} (λ*local={self.lambda_local * r_local:.4f}"
-                      f"{f', global={r_global:.4f}' if r_global != 0.0 else ''})")
+        self._log(2, f"  → reward={reward:.4f} (λ_l*local={self.lambda_local * r_local:.4f}"
+                      f"{f', λ_g*global={self.lambda_global * r_global:.4f}' if r_global != 0.0 else ''})")
         self._log(2, f"  → transition={transition}, "
                       f"n_active={len(self.solver.active)}")
 

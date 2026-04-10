@@ -2,8 +2,8 @@
 
 **Project:** DRL-AMR Stage 1 — Multi-Round Sequential Architecture  
 **Created:** 2026-03-24  
-**Last Updated:** 2026-04-09 (D-029 implemented and verified; Phase 4.5 fully complete)  
-**Status:** D-029 implemented; Phase 5 (first real training) and Phase 4 (threshold baseline) next  
+**Last Updated:** 2026-04-09 (Phase 5 first training runs revealed minimum-mesh attractor; Phase 5.5 created for reward redesign)  
+**Status:** Phase 5 first runs complete; reward structure redesign required before Stage 1A success criterion can be evaluated. Phase 5.5 active.  
 **Authoritative Spec:** `strategy/proposals/Stage_1_Architecture_Specification.md`
 
 ---
@@ -573,6 +573,93 @@ This task covers the unchecked test items from Phase 2 that the interactive test
 
 ---
 
+### Phase 5.5: Reward Structure Redesign
+**Status:** Active (2026-04-09)  
+**Estimated effort:** 2–4 sessions (depends on how many redesign iterations are needed)  
+**Priority:** Blocking Stage 1A success criterion evaluation
+
+Phase 5 first training runs (2026-04-09) revealed a structural problem with the reward formulation: all three runs with different parameter settings converged to a minimum-mesh degenerate optimum (resource usage ~0.17, refine masked 0% of the time). The reward as specified in `Stage_1_Architecture_Specification.md` §8 has a minimum-mesh attractor that parameter tuning alone cannot escape. See D-030 for full diagnosis.
+
+**Objective:** Find a reward formulation that produces a working training signal — the agent must learn to adaptively refine and coarsen based on error structure, not converge to mesh minimization.
+
+**Brainstormed candidate modifications (full list in session notes):**
+
+*Global reward changes:*
+- **G1:** Per-element normalization — `r_global = -Σ(penalty_k) / n_active`. Removes the "fewer terms" exploit. First choice.
+- G2: Positive coverage term for neutral-zone elements
+- G3: Reference mesh comparison (AMR vs uniform at same element count)
+- G4: Inverse error signal (abandon classification framework)
+- G5: Budget utilization term (probably bad idea — bribes agent to use elements)
+
+*Local reward changes:*
+- **L1:** Positive refinement reward p_rr (symmetric with p_cr). Held in reserve — pairs with re-enabling p_cr, becomes tuning concern.
+- L2: Penalize hold-when-wrong (removes "hold is safe" default)
+- L3: Scale local penalty by 1/n_active
+
+*Delivery structure changes:*
+- **D1:** Separate `lambda_local` and `lambda_global` for independent scaling. Infrastructure — implement alongside first experiment.
+- D2: Spread global reward across interval steps
+- D3: Incremental global reward (potential-based shaping)
+
+*Observation changes:*
+- O1: Per-element budget context
+- O2: Explicit zone classification signal
+
+*Episode structure changes:*
+- E1: Tuning lambdas
+- E2: Increase n_remesh
+- E3: Random mesh initialization (Foucart §5.3)
+
+**Task 5.5.0: Minimal visual evaluation script** (added 2026-04-10)
+
+Blocker for productive reward iteration. Without visual inspection of agent-produced meshes, reward tuning is blind guesswork.
+
+- [ ] Create `analysis/multiround/visual_eval.py` (~100 lines minimum viable)
+- [ ] Load trained model, create env with `pre_advance_range=(1.0, 1.0)` for determinism
+- [ ] Run one episode with `model.predict(obs, deterministic=True)`
+- [ ] Capture mesh state at end of each remesh interval
+- [ ] Plot: 4 final meshes in a row, solution overlaid, error classification per element
+- [ ] CLI args: `--model-path`, `--icase`, `--seed`
+- [ ] Retroactively run on all 4 existing trained models (Runs 1–4) to understand what behaviors they actually produced
+- [ ] Outcome determines next Phase 5.5 step: barrier function (if over-refining uniformly), or continued reward tuning (if refining in wrong places), or declare Run 4 close-to-working (if mesh is well-adapted)
+
+**Task 5.5.1: Implement G1 + D1 (first experiment)**
+
+- [ ] Add `lambda_global` constructor parameter to `DGAMREnvMultiround` (default 1.0 for backward compat)
+- [ ] Update `step()` reward formula: `reward = lambda_local * r_local + lambda_global * r_global`
+- [ ] Modify `_compute_global_reward()` to normalize by `n_active`: `return -total_penalty / n_active`
+- [ ] Thread `lambda_global` through YAML config, DEFAULT_CONFIG, create_env
+- [ ] Run 100k training with default parameters + G1 + D1 (lambda_global=1.0 initially)
+- [ ] Analyze: does the agent now refine? Final resource usage > 0.3? Action distribution shift away from hold-dominated?
+- [ ] Log findings in experiment log S1-5.5.1
+
+**Task 5.5.2: Iterate based on G1+D1 results**
+
+Depending on what the G1+D1 run produces:
+- If encouraging but under-refining: try scaling lambda_global higher (stronger global signal)
+- If over-refining: scale lambda_global lower, or keep as-is and tune other parameters
+- If still minimum-mesh: something more fundamental is wrong — consider L2 (penalize wrong hold) or E3 (random init)
+- If learning but not producing good meshes: consider G2 (positive coverage term) or L1+p_cr re-enabled
+
+**Task 5.5.3: Experiment log**
+
+- [ ] Create `research_logs/EXP_LOG_S1_5.5_reward_redesign.md` using template
+- [ ] Document each reward variant tried, training diagnostics, and outcomes
+- [ ] When a working formulation is found, document its parameters and behavior in detail
+
+**Task 5.5.4: Architecture Specification update**
+
+- [ ] Once a working formulation is found, update `strategy/proposals/Stage_1_Architecture_Specification.md` §8 to reflect the final reward structure
+- [ ] Update DECISION_LOG.md with the resolution of D-030
+- [ ] Propagate to architecture description documents (relevant for advisor meeting)
+
+**Success criterion for Phase 5.5:** Agent produces meshes with resource usage > 0.4, refines when appropriate (refine action > 20% in under-refined states), and shows positive improvement in combined reward over training. Ready to re-attempt Phase 5 Task 5.5 (Stage 1A assessment).
+
+**Depends on:** Phase 5 diagnosis complete (done 2026-04-09)  
+**Blocks:** Phase 5 Task 5.5 (Stage 1A assessment), Stage 1B
+
+---
+
 ## Stage 1B: Ablation and Tuning
 **Status:** Not Started  
 **Depends on:** Stage 1A complete  
@@ -638,7 +725,8 @@ Systematic ablation sweeps. Each ablation is a separate experiment log.
 | S1-4.1 | Threshold AMR baseline | 4 | Not started | — | — |
 | S1-4.5.1 | Interactive multiround tester | 4.5 | Complete | Notebook built: 6 cells, InteractiveMultiroundTester class, ipywidgets UI, 4-row visualization (mesh/solution/error classification/history), queue priority display, action masking, auto-complete round/interval, settings panel. Zero-error initialization discovered — all errors zero at t=0 due to exact nodal IC interpolation (not L2 projection). Led to D-029 (pre-episode solver advance). D-029 implemented and verified 2026-04-09: non-zero thresholds (e_max≈4.98e-03, e_min≈1.72e-03), mixed zone classification (3 UNDER, 4 OVER, 1 NEUTRAL on Gaussian IC), priority-magnitude queue ordering validated. | — |
 | S1-5.1 | Integration test and first training | 5 | Not started (unblocked) | D-029 complete; ready for Phase 5 | — |
-| S1-D029 | Pre-episode solver advance | D-029 | Complete | Implemented in reset(): randomized [0.6T, 1.4T] pre-advance after IC initialization. Constructor parameter pre_advance_range=(0.6, 1.4). Threaded through YAML config and train_multiround.py. Verified via interactive tester: non-zero errors, meaningful thresholds, mixed classification, non-trivial queue ordering. | — |
+| S1-5.5.1 | G1+D1 first experiment | 5.5 | Complete | Run 4: G1 alone collapsed signal (return -21, 94% hold). Run 5: G1+λ_global=10+level1 flipped to over-refinement (resource 1.06, refine masked 87%). Cannot diagnose further without visual mesh inspection. | EXP_LOG_S1_5.5 (TBD) |
+| S1-5.5.0 | Minimal visual evaluation script | 5.5 | Blocking | Must be built before further reward iteration | — |
 
 ---
 
@@ -656,6 +744,7 @@ Systematic ablation sweeps. Each ablation is a separate experiment log.
 | 8 | 2026-03-30 | Phase 3 Task 3.3 — hang debugging + smoke test | Task 3.3 complete; Phase 3 complete | Training hang root cause: `np.linalg.solve()` in `_update_matrices()` hangs on macOS Accelerate BLAS backend instead of raising `LinAlgError`. Stack trace captured via `faulthandler.dump_traceback()` (threading.Timer approach — C-level dump_traceback_later not needed). Fix: replaced `np.linalg.solve(M, R)` with `np.linalg.lstsq(M, R, rcond=None)` + rank-deficiency warning. Verified: SB3 2.7.1 + sb3-contrib 2.7.1 (version match confirmed, not the issue). Standard PPO also hung (not MaskablePPO-specific). CartPole sanity check passed (SB3/PyTorch healthy). After fix: standard PPO 2k steps pass, MaskablePPO 2k steps pass, full 10k smoke test pass (78 episodes, 284 fps). All outputs verified: final_model.zip, checkpoint at 10k, monitor CSV (returns range -635 to -1717), training_diagnostics.json, training_report.pdf, tensorboard logs. Checkpoint load test passed. NOTE: same `np.linalg.solve` pattern exists in `dg_advection_solver.py` (original) and `dg_wave_solver_evaluation.py` (evaluation) — apply lstsq fix to both before using on macOS. Implementation decision 25 documented. |
 | 9 | 2026-04-07 | Phase 4.5 — Interactive Multiround Tester | Tasks 4.5.1–4.5.3 complete; Task 4.5.4 deferred to post-D-029 | Built `notebooks/interactive_amr_multiround_tester_code.py` (6 cells, ~600 lines). Class split across cells: Cell 2 (infrastructure: __init__, create_environment, setup_widgets, utilities), Cell 3 (action handlers: on_step, on_auto_complete_round/interval, on_reset, on_apply_settings), Cell 4 (visualization: render, 6 plot methods, show_tester). Features: queue priority table with error/classification display, HTML status bar with action mask indicators, error classification plot with α-based thresholds, dual reward visualization (λ·local + global stacked bars), round/interval boundary markers in history plots, auto-complete with verbosity suppression, icase dropdown + initial_refinement_level slider. Initial test confirmed zero-error initialization — `_initialize_solution()` uses nodal interpolation (not L2 projection), producing zero boundary jumps at t=0. Discussed with advisor → D-029 (pre-episode solver advance). Task 4.5.4 verification deferred until D-029 provides non-zero initial errors for meaningful testing. |
 | 10 | 2026-04-09 | D-029 Implementation + Phase 4.5 completion | D-029 implemented and verified; Phase 4.5 fully complete | Implemented pre-episode solver advance (D-029) in reset(): 3 code changes (constructor parameter, reset() insertion, YAML + training script threading). Verified via interactive tester: Gaussian IC shows e_max≈4.98e-03, e_min≈1.72e-03, mixed classification (3 UNDER near pulse, 4 OVER in flat regions, 1 NEUTRAL), priority-magnitude queue validated (far-OVER elements sort to top with priority ~2.9). Phase 4.5 Task 4.5.4 confirmed complete. Phase 5 unblocked. |
+| 11 | 2026-04-10 | Phase 5 first training + Phase 5.5 diagnosis | 3 baseline runs + 2 G1+D1 runs; minimum-mesh attractor diagnosed; D-030 logged; Phase 5.5 created | Runs 1–3: all converged to resource~0.17 with different failure modes (coarsen-harvesting, hold-dominant, hold-dominant-level1). Identified minimum-mesh attractor as structural reward problem. Logged D-030, created Phase 5.5 with G1/L1/D1 candidate modifications. Implemented G1 (per-element normalization) + D1 (separate lambda_global). Run 4 (G1, λ_g=1.0): signal collapsed, 94% hold, resource 0.20. Run 5 (G1, λ_g=10.0, level1): flipped to over-refinement, resource 1.06, refine masked 87%. Cannot diagnose further without visual mesh inspection. Added Task 5.5.0 (minimal visual eval script) as blocker. YAML syntax bug discovered and fixed (quoted keys + trailing commas made lambda_global invisible to YAML parser). |
 
 ---
 

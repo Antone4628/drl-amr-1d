@@ -313,6 +313,22 @@
 
 ---
 
+### D-030: Reward structure redesign — minimum-mesh attractor diagnosed
+**Date:** 2026-04-09  
+**Status:** In progress (Phase 5.5)  
+**Source:** Phase 5 first training runs revealed structural reward problem  
+**Decision:** The reward structure as specified in `Stage_1_Architecture_Specification.md` §8 produces a degenerate optimum at minimum mesh size. Three first-training runs with different parameters (p_cr=2.0, p_cr=0.0, and p_cr=0.0 with initial_refinement_level=1 and lambda_local=0.5) all converged to final resource usage ~0.17 (5-8 elements out of 30 budget), with refine masked 0% of the time — the agent actively chose not to refine. A reward restructure is required before Stage 1A success criterion can be evaluated. Phase 5.5 is created to systematically explore and fix the reward structure.  
+**Rationale for the minimum-mesh attractor:** The global reward `r_global = -Σ(penalty_k)` sums over active elements. Fewer elements means fewer terms in the sum, directly incentivizing mesh minimization. Additionally, the local reward has no positive signal for refinement (refining an under-refined element yields r_local=0 — correct but unrewarded), and the hold action is always zero-penalty, making inaction the safe default. These two structural issues compound: global reward rewards fewer elements, and local reward has no counterbalancing positive refinement signal.  
+**First diagnostic runs (2026-04-09):**
+- Run 1 (default config, p_cr=2.0, lambda_local=0.1, init_level=0): mean return ≈ -93, final resource 0.16, coarsen freq 25%. Agent harvests p_cr rewards from aggressive coarsening.
+- Run 2 (p_cr=0.0, lambda_local=0.1, init_level=0): mean return ≈ -150, final resource 0.18, hold dominant (78%). Agent learns "do nothing" since hold is zero-penalty.
+- Run 3 (p_cr=0.0, lambda_local=0.5, init_level=1): mean return ≈ -166, final resource 0.17, hold still dominant (69%). Lambda scaling and starting mesh adjustments don't escape the attractor.
+
+**Planned fixes (Phase 5.5):** G1 (per-element normalization of global reward) as first experiment. D1 (separate lambda_local, lambda_global) as infrastructure, implemented alongside G1. L1 (positive refinement reward) held in reserve if G1+D1 insufficient — pairs with re-enabling p_cr, which makes it a tuning concern rather than a structural one.  
+**Implications:** Architecture Specification §8 will be revised once a working formulation is found. Phase 5 Stage 1A success criterion ("outperforms uniform refinement on at least some IC/α combinations") cannot be evaluated until Phase 5.5 resolves the reward structure. Training infrastructure, environment, and pipeline are all validated — the issue is reward design, not implementation.
+
+---
+
 ## Pending Decisions (Updated 2026-04-07)
 
 | ID | Topic | Blocking | Target Resolution |

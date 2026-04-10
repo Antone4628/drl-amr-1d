@@ -22,7 +22,7 @@ environment:
   element_budget: 30             # Soft cap on active elements
   n_remesh: 4                    # Remesh intervals per episode (D-027)
   step_domain_fraction: 0.05     # Wave travel per interval (Spec §4.1)
-  initial_refinement_level: 0    # 0 = start from base mesh
+  initial_refinement_level: 1    # 0 = start from base mesh
   pre_advance_range: [0.6, 1.4]   # D-029: randomized pre-episode advance (multiples of T)
   ic_pool: [1, 10, 12, 13, 14, 15, 16]  # Multi-IC pool (Spec §11.1)
   verbosity: 0                   # 0=silent for training
@@ -31,10 +31,9 @@ environment:
 reward:
   p_ur: 10.0                     # Under-refinement penalty (DynAMO default)
   p_or: 5.0                      # Over-refinement penalty (DynAMO default)
-  p_cr: 2.0                      # Correct coarsening reward (D-023)
-  lambda_local: 0.1              # Local-to-global weighting (Spec §12.3)
-  'lambda_local': 0.1,             # Local reward scaling (Spec §12.3)
-  'lambda_global': 1.0,            # Global reward scaling (D-030, Phase 5.5)
+  p_cr: 0.0                      # Correct coarsening reward (D-023, disabled for Phase 5.5)
+  lambda_local: 0.1              # Local reward scaling (Spec §12.3)
+  lambda_global: 10.0            # Global reward scaling (D-030, Phase 5.5 — compensates for G1 normalization)
 
 # ----- Solver parameters -----
 solver:

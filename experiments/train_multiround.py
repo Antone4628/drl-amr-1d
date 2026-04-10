@@ -90,7 +90,8 @@ DEFAULT_CONFIG = {
         'p_ur': 10.0,                    # Under-refinement penalty (DynAMO default)
         'p_or': 5.0,                     # Over-refinement penalty (DynAMO default)
         'p_cr': 2.0,                     # Correct coarsening reward (D-023)
-        'lambda_local': 0.1,             # Local-to-global weighting (Spec §12.3)
+        'lambda_local': 0.1,             # Local reward scaling (Spec §12.3)
+        'lambda_global': 1.0,            # Global reward scaling (D-030, Phase 5.5)
     },
 
     # ----- Solver parameters -----
@@ -240,6 +241,7 @@ def create_env(config: dict, seed: int, log_dir: str = None) -> Monitor:
         p_or=rew_cfg['p_or'],
         p_cr=rew_cfg['p_cr'],
         lambda_local=rew_cfg['lambda_local'],
+        lambda_global=rew_cfg['lambda_global'],
         n_remesh=env_cfg['n_remesh'],
         step_domain_fraction=env_cfg['step_domain_fraction'],
         initial_refinement_level=env_cfg['initial_refinement_level'],
@@ -438,7 +440,7 @@ def train(config: dict, results_dir: str):
     print(f"  IC pool: {env_cfg['ic_pool']}")
     print(f"\nReward:")
     print(f"  p_ur={rew_cfg['p_ur']}, p_or={rew_cfg['p_or']}, p_cr={rew_cfg['p_cr']}")
-    print(f"  lambda_local={rew_cfg['lambda_local']}")
+    print(f"  lambda_local={rew_cfg['lambda_local']}, lambda_global={rew_cfg['lambda_global']}")
 
     # ========================================================================
     # Train
