@@ -93,6 +93,10 @@ This produces a trained model, training report PDF, metrics JSON, and summary CS
 
 - **[`1D_DRL_AMR_COMPLETE_WORKFLOW.md`](1D_DRL_AMR_COMPLETE_WORKFLOW.md)** — Full pipeline instructions: parameter sweep training, batch evaluation, three-stage analysis, transferability testing, and troubleshooting.
 
+## Research Notes
+
+Research logs, strategic planning documents, experiment logs, decision log, and session handoffs live in a separate **private** companion repository: `drl-amr-1d-notes/`. That repo is Mac-only and is not cloned to Borah — this code repo is the single source of truth for anything that runs on HPC. If you're reading this as an external collaborator and need access to research context, contact the maintainer.
+
 ## Project Structure
 
 See [`project_tree.md`](project_tree.md) for the complete directory tree.
