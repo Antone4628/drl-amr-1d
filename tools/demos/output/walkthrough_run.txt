@@ -1,0 +1,478 @@
+
+==============================================================================
+ Section 1: Setup
+==============================================================================
+  Seed:                       42
+  Polynomial order (nop):     4
+  LGL nodes per element:      5
+  Base mesh xelem:            [-1.  -0.4  0.   0.4  1. ]
+  Base element widths:        [0.6 0.4 0.4 0.6]
+  Initial refinement level:   1
+  Max level:                  3
+  Max elements (safety net):  120
+  Element budget (RL):        30
+  IC (icase):                 1 (Gaussian pulse)
+  Wave speed:                 (set by IC; printed below)
+
+  Reward parameters:
+    alpha (error tolerance):  0.1
+    beta  (hysteresis):       1.2
+    p_ur  (under-ref penalty):10.0
+    p_or  (over-ref penalty): 5.0
+    p_cr  (correct coarsen):  2.0  (D-020)
+    lambda_local:             0.1
+
+  D-029 pre-advance multiplier: 1.0
+    (env samples Uniform(0.6, 1.4); fixed here for reproducibility)
+
+==============================================================================
+ Section 2: Initial mesh (post initial refinement, pre pre-advance)
+==============================================================================
+  Wave speed: 2
+  Number of active elements: 8
+  Active list (element IDs): [5, 6, 7, 8, 9, 10, 11, 12]
+
+   idx   elem_id   level      x_left     x_right       width
+     0         5       1     -1.0000     -0.7000      0.3000
+     1         6       1     -0.7000     -0.4000      0.3000
+     2         7       1     -0.4000     -0.2000      0.2000
+     3         8       1     -0.2000      0.0000      0.2000
+     4         9       1      0.0000      0.2000      0.2000
+     5        10       1      0.2000      0.4000      0.2000
+     6        11       1      0.4000      0.7000      0.3000
+     7        12       1      0.7000      1.0000      0.3000
+
+  Solver time: 0.0
+
+==============================================================================
+ Section 3: D-029 pre-episode solver advance
+==============================================================================
+  Remesh interval T = step_domain_fraction * (x_R - x_L) / wave_speed
+                    = 0.05 * 2.0 / 2
+                    = 0.050000 s
+
+  Pre-advance duration = multiplier * T
+                       = 1.0 * 0.050000
+                       = 0.050000 s
+
+  CFL-limited dt = courant_max * dx_min / wave_speed
+                 = 0.1 * 0.2000 / 2
+                 = 0.010000 s
+
+  Sub-steps taken:   5
+  Solver time:       0.000000 -> 0.050000
+
+  >>> Plot saved to: /Users/antonechacartegui/projects/drl-amr-1d/tools/demos/output/mesh_and_solution_post_preadvance.png
+
+==============================================================================
+ Section 4: Boundary jump computation (per element)
+==============================================================================
+  For each element k, the error indicator is the average of left and
+  right boundary jumps:
+
+      e_k = (|u_k(x_L) - u_neighbor(x_R)| + |u_k(x_R) - u_neighbor(x_L)|) / 2
+
+  Periodic BCs: element 5's left neighbor is element 12, etc.
+
+
+  Element 5  (active_idx = 0)
+  -----------------------------
+    Left neighbor:  element 12 (periodic wrap)
+      u[5](x_L) = -6.1832e-05
+      u[12](x_R) = -7.6076e-05
+      left_jump = |-6.1832e-05 - -7.6076e-05|
+                = 1.4244e-05
+    Right neighbor: element 6
+      u[5](x_R) = -3.1405e-06
+      u[6](x_L) = -6.7329e-06
+      right_jump = |-3.1405e-06 - -6.7329e-06|
+                 = 3.5923e-06
+    e_5 = (left_jump + right_jump) / 2 = 8.9181e-06
+
+  Element 6  (active_idx = 1)
+  -----------------------------
+    Left neighbor:  element 5
+      u[6](x_L) = -6.7329e-06
+      u[5](x_R) = -3.1405e-06
+      left_jump = |-6.7329e-06 - -3.1405e-06|
+                = 3.5923e-06
+    Right neighbor: element 7
+      u[6](x_R) = 1.6253e-07
+      u[7](x_L) = -6.1967e-07
+      right_jump = |1.6253e-07 - -6.1967e-07|
+                 = 7.8220e-07
+    e_6 = (left_jump + right_jump) / 2 = 2.1873e-06
+
+  Element 7  (active_idx = 2)
+  -----------------------------
+    Left neighbor:  element 6
+      u[7](x_L) = -6.1967e-07
+      u[6](x_R) = 1.6253e-07
+      left_jump = |-6.1967e-07 - 1.6253e-07|
+                = 7.8220e-07
+    Right neighbor: element 8
+      u[7](x_R) = -1.5492e-07
+      u[8](x_L) = 3.1957e-03
+      right_jump = |-1.5492e-07 - 3.1957e-03|
+                 = 3.1959e-03
+    e_7 = (left_jump + right_jump) / 2 = 1.5983e-03
+
+  Element 8  (active_idx = 3)
+  -----------------------------
+    Left neighbor:  element 7
+      u[8](x_L) = 3.1957e-03
+      u[7](x_R) = -1.5492e-07
+      left_jump = |3.1957e-03 - -1.5492e-07|
+                = 3.1959e-03
+    Right neighbor: element 9
+      u[8](x_R) = 8.2930e-02
+      u[9](x_L) = 5.9906e-02
+      right_jump = |8.2930e-02 - 5.9906e-02|
+                 = 2.3023e-02
+    e_8 = (left_jump + right_jump) / 2 = 1.3110e-02
+
+  Element 9  (active_idx = 4)
+  -----------------------------
+    Left neighbor:  element 8
+      u[9](x_L) = 5.9906e-02
+      u[8](x_R) = 8.2930e-02
+      left_jump = |5.9906e-02 - 8.2930e-02|
+                = 2.3023e-02
+    Right neighbor: element 10
+      u[9](x_R) = 5.2041e-02
+      u[10](x_L) = 2.2621e-02
+      right_jump = |5.2041e-02 - 2.2621e-02|
+                 = 2.9420e-02
+    e_9 = (left_jump + right_jump) / 2 = 2.6222e-02
+
+  Element 10  (active_idx = 5)
+  ------------------------------
+    Left neighbor:  element 9
+      u[10](x_L) = 2.2621e-02
+      u[9](x_R) = 5.2041e-02
+      left_jump = |2.2621e-02 - 5.2041e-02|
+                = 2.9420e-02
+    Right neighbor: element 11
+      u[10](x_R) = 4.3492e-04
+      u[11](x_L) = 4.6354e-03
+      right_jump = |4.3492e-04 - 4.6354e-03|
+                 = 4.2004e-03
+    e_10 = (left_jump + right_jump) / 2 = 1.6810e-02
+
+  Element 11  (active_idx = 6)
+  ------------------------------
+    Left neighbor:  element 10
+      u[11](x_L) = 4.6354e-03
+      u[10](x_R) = 4.3492e-04
+      left_jump = |4.6354e-03 - 4.3492e-04|
+                = 4.2004e-03
+    Right neighbor: element 12
+      u[11](x_R) = -6.9750e-04
+      u[12](x_L) = -2.3048e-04
+      right_jump = |-6.9750e-04 - -2.3048e-04|
+                 = 4.6702e-04
+    e_11 = (left_jump + right_jump) / 2 = 2.3337e-03
+
+  Element 12  (active_idx = 7)
+  ------------------------------
+    Left neighbor:  element 11
+      u[12](x_L) = -2.3048e-04
+      u[11](x_R) = -6.9750e-04
+      left_jump = |-2.3048e-04 - -6.9750e-04|
+                = 4.6702e-04
+    Right neighbor: element 5 (periodic wrap)
+      u[12](x_R) = -7.6076e-05
+      u[5](x_L) = -6.1832e-05
+      right_jump = |-7.6076e-05 - -6.1832e-05|
+                 = 1.4244e-05
+    e_12 = (left_jump + right_jump) / 2 = 2.4063e-04
+
+  [check] Manual computation matches compute_element_errors() to numerical precision.
+
+==============================================================================
+ Section 5: Error array summary
+==============================================================================
+   idx   elem_id           error
+     0         5      8.9181e-06
+     1         6      2.1873e-06
+     2         7      1.5983e-03
+     3         8      1.3110e-02
+     4         9      2.6222e-02
+     5        10      1.6810e-02
+     6        11      2.3337e-03
+     7        12      2.4063e-04
+
+  e_infinity = max(errors) = 2.6222e-02  (from element 9, active_idx 4)
+
+==============================================================================
+ Section 6: Threshold computation (DynAMO Eq. 16, 21)
+==============================================================================
+  e_max = alpha * e_infinity
+        = 0.1 * 2.6222e-02
+        = 2.6222e-03
+
+  e_min = e_max ^ beta
+        = 2.6222e-03 ^ 1.2
+        = 7.9872e-04
+
+  Three-zone classification:
+    UNDER-REFINED:  e_k > e_max (2.6222e-03)
+    NEUTRAL:        e_min <= e_k <= e_max
+    OVER-REFINED:   e_k < e_min (7.9872e-04)
+
+  [check] Matches compute_alpha_thresholds() to numerical precision.
+
+==============================================================================
+ Section 7: Per-element classification and priority
+==============================================================================
+  Priority is the distance from the neutral zone (positive in both directions):
+
+    UNDER-REFINED: priority = log10(e_k / e_max)
+    OVER-REFINED:  priority = log10(e_min / e_k)
+    NEUTRAL:       priority = 0
+
+   idx   elem_id           error      region        priority  formula
+     0         5      8.9181e-06        over          1.9521  log10(7.99e-04/8.92e-06)
+     1         6      2.1873e-06        over          2.5625  log10(7.99e-04/2.19e-06)
+     2         7      1.5983e-03     neutral          0.0000  (neutral zone)
+     3         8      1.3110e-02       under          0.6989  log10(1.31e-02/2.62e-03)
+     4         9      2.6222e-02       under          1.0000  log10(2.62e-02/2.62e-03)
+     5        10      1.6810e-02       under          0.8069  log10(1.68e-02/2.62e-03)
+     6        11      2.3337e-03     neutral          0.0000  (neutral zone)
+     7        12      2.4063e-04        over          0.5210  log10(7.99e-04/2.41e-04)
+
+  Region counts: 3 under-refined, 2 neutral, 3 over-refined
+
+==============================================================================
+ Section 8: Sorted queue (descending priority)
+==============================================================================
+  Stored as element IDs (not indices) for stability across mesh changes:
+  queue = [6, 5, 9, 10, 8, 12, 7, 11]
+
+   queue_pos   elem_id   active_idx        priority      region
+           0         6            1          2.5625        over
+           1         5            0          1.9521        over
+           2         9            4          1.0000       under
+           3        10            5          0.8069       under
+           4         8            3          0.6989       under
+           5        12            7          0.5210        over
+           6         7            2          0.0000     neutral
+           7        11            6          0.0000     neutral
+
+  >>> queue[0] = element 6 (region: over). This is the first element the agent will see.
+
+==============================================================================
+ Section 9: Observation for queue[0] = element 6
+==============================================================================
+
+  Component 0: normalized error for current element
+  ---------------------------------------------------
+    Element 6 (queue[0])
+      e_k          = 2.1873e-06  (from Section 5)
+      e_inf        = 2.6222e-02      (from Section 5)
+      alpha*e_inf  = 0.1 * 2.6222e-02 = 2.6222e-03
+      log10(alpha*e_inf) = -2.5813
+      log10(e_k)         = -5.6601
+      o = -log10(e_k) / log10(alpha*e_inf)
+        = -(-5.6601) / (-2.5813)
+        = -2.1927
+
+  Component 1: normalized error for LEFT neighbor
+  -------------------------------------------------
+    Left neighbor
+      neighbor element: 5
+      e_k          = 8.9181e-06  (from Section 5)
+      e_inf        = 2.6222e-02      (from Section 5)
+      alpha*e_inf  = 0.1 * 2.6222e-02 = 2.6222e-03
+      log10(alpha*e_inf) = -2.5813
+      log10(e_k)         = -5.0497
+      o = -log10(e_k) / log10(alpha*e_inf)
+        = -(-5.0497) / (-2.5813)
+        = -1.9562
+
+  Component 2: normalized error for RIGHT neighbor
+  --------------------------------------------------
+    Right neighbor
+      neighbor element: 7
+      e_k          = 1.5983e-03  (from Section 5)
+      e_inf        = 2.6222e-02      (from Section 5)
+      alpha*e_inf  = 0.1 * 2.6222e-02 = 2.6222e-03
+      log10(alpha*e_inf) = -2.5813
+      log10(e_k)         = -2.7963
+      o = -log10(e_k) / log10(alpha*e_inf)
+        = -(-2.7963) / (-2.5813)
+        = -1.0833
+
+  Component 3: current element refinement level (normalized)
+  ------------------------------------------------------------
+    level = 1 (from label_mat[5][4])
+    obs_level = level / max_level = 1 / 3 = 0.3333
+
+  Component 4: LEFT neighbor refinement level (normalized)
+  ----------------------------------------------------------
+    neighbor element: 5
+    level = 1
+    obs_left_level = 1 / 3 = 0.3333
+
+  Component 5: RIGHT neighbor refinement level (normalized)
+  -----------------------------------------------------------
+    neighbor element: 7
+    level = 1
+    obs_right_level = 1 / 3 = 0.3333
+
+  Component 6: resource usage
+  -----------------------------
+    resource_usage = n_active / element_budget
+                   = 8 / 30
+                   = 0.2667
+
+  Component 7: round progress
+  -----------------------------
+    round_progress = round_number / max_level
+                   = 1 / 3
+                   = 0.3333
+
+  Final observation vector (8 components)
+  -----------------------------------------
+    obs = [-2.1927, -1.9562, -1.0833, 0.3333, 0.3333, 0.3333, 0.2667, 0.3333]
+
+    Sanity: o_0 = -2.1927 -> element is below refinement threshold.
+    (alpha-normalization: values cluster near 1.0 at the decision boundary)
+
+  [check] Components 0-2 match compute_normalized_error() to numerical precision.
+
+==============================================================================
+ Section 10: Local reward walkthrough (manually-assigned actions)
+==============================================================================
+  Actions are assigned to maximize coverage of the 3x3 (region x action)
+  classification table for pedagogical clarity. A real policy would
+  choose differently.
+
+  Reward formulas (Architecture Spec Section 8.1):
+
+    UNDER-REFINED (e_k > e_max):
+      coarsen -> -p_ur * |log10(e_k / e_max)|       [WRONG]
+      hold    -> 0                                  [acceptable]
+      refine  -> 0                                  [correct]
+
+    OVER-REFINED (e_k < e_min):
+      coarsen -> +p_cr * |log10(e_k / e_min)|       [CORRECT, D-020]
+      hold    -> 0                                  [acceptable]
+      refine  -> -p_or * |log10(e_k / e_min)|       [WRONG]
+
+    NEUTRAL (e_min <= e_k <= e_max):
+      all actions -> 0                              [acceptable]
+
+
+  Action assignments
+  --------------------
+   idx   elem_id      region    action                       rationale
+     0         5        over   coarsen          CORRECT (D-020 reward)
+     1         6        over      hold                      acceptable
+     2         7     neutral    refine               acceptable (zero)
+     3         8       under    refine                  correct (zero)
+     4         9       under      hold                      acceptable
+     5        10       under   coarsen                WRONG (penalize)
+     6        11     neutral   coarsen               acceptable (zero)
+     7        12        over    refine                WRONG (penalize)
+
+  Element 5 (active_idx=0)  region=OVER  action=coarsen
+  -------------------------------------------------------
+    Correct-direction action: element is over-refined, agent coarsens.
+    Reward weight: p_cr = 2.0  (D-020: positive coarsening reward)
+
+    log_ratio = |log10(e_k / e_min)|
+              = |log10(8.9181e-06 / 7.9872e-04)|
+              = |log10(1.1165e-02)|
+              = |-1.9521|
+              = 1.9521
+
+    r_local = +p_cr * log_ratio
+            = +2.0 * 1.9521
+            = +3.9042
+
+  Element 6 (active_idx=1)  region=OVER  action=hold
+  ----------------------------------------------------
+    Action is acceptable (hold); no penalty or reward.
+    r_local = 0
+
+  Element 7 (active_idx=2)  region=NEUTRAL  action=refine
+  ---------------------------------------------------------
+    Element is in the neutral zone; all actions return zero reward.
+    r_local = 0
+
+  Element 8 (active_idx=3)  region=UNDER  action=refine
+  -------------------------------------------------------
+    Action is correct; no penalty.
+    r_local = 0
+
+  Element 9 (active_idx=4)  region=UNDER  action=hold
+  -----------------------------------------------------
+    Action is acceptable; no penalty.
+    r_local = 0
+
+  Element 10 (active_idx=5)  region=UNDER  action=coarsen
+  ---------------------------------------------------------
+    Wrong-direction action: element needs refinement, agent coarsens.
+    Penalty weight: p_ur = 10.0
+
+    log_ratio = |log10(e_k / e_max)|
+              = |log10(1.6810e-02 / 2.6222e-03)|
+              = |log10(6.4108e+00)|
+              = |0.8069|
+              = 0.8069
+
+    r_local = -p_ur * log_ratio
+            = -10.0 * 0.8069
+            = -8.0691
+
+  Element 11 (active_idx=6)  region=NEUTRAL  action=coarsen
+  -----------------------------------------------------------
+    Element is in the neutral zone; all actions return zero reward.
+    r_local = 0
+
+  Element 12 (active_idx=7)  region=OVER  action=refine
+  -------------------------------------------------------
+    Wrong-direction action: element is over-refined, agent refines further.
+    Penalty weight: p_or = 5.0
+
+    log_ratio = |log10(e_k / e_min)|
+              = |log10(2.4063e-04 / 7.9872e-04)|
+              = |log10(3.0127e-01)|
+              = |-0.5210|
+              = 0.5210
+
+    r_local = -p_or * log_ratio
+            = -5.0 * 0.5210
+            = -2.6052
+
+==============================================================================
+ Section 10 (cont.): Summary table
+==============================================================================
+   idx   elem_id      region    action     r_local  classification
+     0         5        over   coarsen      3.9042  correct coarsen (D-020)
+     1         6        over      hold      0.0000  acceptable
+     2         7     neutral    refine      0.0000  neutral (zero)
+     3         8       under    refine      0.0000  correct
+     4         9       under      hold      0.0000  acceptable
+     5        10       under   coarsen     -8.0691  wrong (penalty)
+     6        11     neutral   coarsen      0.0000  neutral (zero)
+     7        12        over    refine     -2.6052  wrong (penalty)
+
+  Sum of local rewards this round: -6.7701
+  (For reference only -- the env delivers rewards at the per-step level;
+   there is no round-level sum in the actual training loop.)
+
+  Each step also gets multiplied by lambda_local = 0.1:
+    weighted sum = 0.1 * -6.7701 = -0.6770
+
+==============================================================================
+ End of walkthrough
+
+  Not shown here:
+    - Mesh adaptation (action execution + balance cascades)
+    - Queue advance to the next element
+    - Subsequent rounds within this remesh interval
+    - Solver advance + global retrospective reward
+      (see Architecture Spec Section 8.2 / Component 6)
+==============================================================================

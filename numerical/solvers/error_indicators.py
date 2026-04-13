@@ -40,29 +40,49 @@ import numpy as np
 # _find_neighbor_index(solver, active_idx, direction)
 # Find index of left/right neighbor in solver.active with periodic wrapping.
 
+# def _find_neighbor_index(solver, active_idx, direction='left'):
+#     """Find the index of a neighbor element in the active list.
+    
+#     Handles periodic boundary conditions by wrapping at domain edges.
+    
+#     Args:
+#         solver: DGAdvectionSolver instance.
+#         active_idx: Index of the current element in solver.active.
+#         direction: 'left' or 'right'.
+    
+#     Returns:
+#         Index of the neighbor in solver.active, or -1 if not found.
+#     """
+#     elem = solver.active[active_idx]
+#     n_total = len(solver.label_mat)
+    
+#     if direction == 'left':
+#         target = elem - 1 if elem > 1 else n_total
+#     else:
+#         target = elem + 1 if elem < n_total else 1
+    
+#     found = np.where(solver.active == target)[0]
+#     return found[0] if len(found) > 0 else -1
+
 def _find_neighbor_index(solver, active_idx, direction='left'):
     """Find the index of a neighbor element in the active list.
-    
-    Handles periodic boundary conditions by wrapping at domain edges.
-    
+
+    Uses active-list-based modular wrap for periodic boundary conditions.
+    Always succeeds — every active element has both neighbors under periodic BC.
+
     Args:
         solver: DGAdvectionSolver instance.
         active_idx: Index of the current element in solver.active.
         direction: 'left' or 'right'.
-    
+
     Returns:
-        Index of the neighbor in solver.active, or -1 if not found.
+        Index of the neighbor in solver.active.
     """
-    elem = solver.active[active_idx]
-    n_total = len(solver.label_mat)
-    
+    n_active = len(solver.active)
     if direction == 'left':
-        target = elem - 1 if elem > 1 else n_total
+        return (active_idx - 1) % n_active
     else:
-        target = elem + 1 if elem < n_total else 1
-    
-    found = np.where(solver.active == target)[0]
-    return found[0] if len(found) > 0 else -1
+        return (active_idx + 1) % n_active
 
 
 # =========================================================================
