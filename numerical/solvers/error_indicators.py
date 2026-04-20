@@ -191,12 +191,16 @@ def compute_alpha_thresholds(errors, alpha, beta):
 
 def compute_normalized_error(e_k, alpha, e_inf, eps=1e-30):
     """Compute α-normalized log-error observation (DynAMO Eq. 15).
-    
+
     o = -log10(e_k) / log10(alpha * e_inf)
-    
-    Values cluster around 1.0 at the decision boundary:
-        o > 1 → element is a refinement candidate
-        o < 1 → element is below threshold
+
+    In the operating regime where alpha * e_inf < 1 (guaranteed for any
+    healthy DG run, since boundary jumps are bounded by solution amplitude),
+    the refinement threshold e_max = alpha * e_inf maps to o = -1:
+        o > -1  →  e_k > e_max  →  refinement candidate
+        o < -1  →  e_k < e_max  →  below refinement threshold
+    Larger raw errors produce larger (less-negative) observation values.
+
     
     Args:
         e_k: Error indicator for the element.
