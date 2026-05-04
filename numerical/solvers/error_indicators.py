@@ -27,6 +27,8 @@ Usage:
     ...     compute_element_errors_zz,
     ... )
     >>> errors = compute_element_errors(solver)
+    >>> errors_zz = compute_element_errors_zz(solver)
+    >>> errors_dispatched = compute_errors(solver, indicator='zz_style')
     >>> e_max, e_min = compute_alpha_thresholds(errors, alpha=0.1, beta=1.2)
     >>> obs_error = compute_normalized_error(errors[k], alpha=0.1, e_inf=errors.max())
 """
@@ -368,3 +370,51 @@ def compute_element_errors_zz(solver):
         errors[i] = np.sqrt(0.5 * (e_L_sq + e_R_sq))
 
     return errors
+
+
+# =========================================================================
+# Indicator Registry and Dispatcher
+# =========================================================================
+# Extensible registry mapping string keys to indicator functions.
+# Each registered function has signature: f(solver) -> np.ndarray
+# returning per-element error values for all active elements.
+#
+# To add a new indicator:
+#   1. Implement compute_element_errors_foo(solver) above
+#   2. Add 'foo': compute_element_errors_foo to INDICATOR_REGISTRY
+#   3. Use error_indicator: "foo" in YAML config
+#
+# Used by DGAMREnvMultiround via compute_errors() dispatcher.
+# =========================================================================
+
+INDICATOR_REGISTRY = {
+    'raw_jump': compute_element_errors,
+    'zz_style': compute_element_errors_zz,
+}
+
+
+def compute_errors(solver, indicator='raw_jump'):
+    """Dispatch to the named error indicator function.
+
+    Central entry point for all error indicator computation. The
+    environment calls this instead of individual indicator functions,
+    allowing indicator selection via config string.
+
+    Args:
+        solver: DGAdvectionSolver instance with an active mesh and
+            current solution.
+        indicator: String key into INDICATOR_REGISTRY. Must match a
+            registered indicator name.
+
+    Returns:
+        np.ndarray of shape (n_active,) with per-element error values.
+
+    Raises:
+        ValueError: If ``indicator`` is not in INDICATOR_REGISTRY.
+    """
+    if indicator not in INDICATOR_REGISTRY:
+        raise ValueError(
+            f"Unknown error indicator '{indicator}'. "
+            f"Available: {sorted(INDICATOR_REGISTRY.keys())}"
+        )
+    return INDICATOR_REGISTRY[indicator](solver)
