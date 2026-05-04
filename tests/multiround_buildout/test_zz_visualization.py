@@ -77,6 +77,7 @@ def parse_args():
                                   to argmax(ZZ error) in main()
             pre_advance (float) — solver advance before visualization, as
                                   a multiple of remesh interval T
+            refinement_level (int) — uniform refinement passes on base mesh
             output_dir (str|None) — output directory; None → directory
                                     of this script
     """
@@ -103,13 +104,22 @@ def parse_args():
              "post-advance dynamics.",
     )
     parser.add_argument(
+        "--refinement-level", type=int, default=0,
+        help="Number of uniform refinement passes applied to the base "
+             "4-element mesh before visualization. 0 = base mesh (4 "
+             "elements), 1 = one pass (8 elements), 2 = two passes (16 "
+             "elements). Higher values produce more elements, most of "
+             "which are in flat regions — useful for demonstrating the "
+             "indicator's spatial discrimination.",
+    )
+    parser.add_argument(
         "--output-dir", type=str, default=None,
         help="Output directory. Omit to save alongside this script.",
     )
     return parser.parse_args()
 
 
-def setup_solver(icase, pre_advance_fraction=0.0):    
+def setup_solver(icase, pre_advance_fraction=0.0, initial_refinement_level=0):   
     """Build a solver, initialize the IC, optionally advance to develop dynamics.
 
     The solver matches the multiround environment's defaults: 4-element
@@ -133,10 +143,16 @@ def setup_solver(icase, pre_advance_fraction=0.0):
         icase: Initial condition selector (passed to DGAdvectionSolver).
         pre_advance_fraction: Multiple of one remesh interval to advance.
             Default 0.0 (t=0 visualization).
+        initial_refinement_level: Number of uniform refinement passes on
+            the base 4-element mesh. 0 = base mesh (4 elements), 1 = 8
+            elements, 2 = 16 elements. Matches the environment's
+            ``initial_refinement_level`` parameter — uses the solver's
+            ``reset(refinement_mode='fixed', refinement_level=N)`` path.
 
     Returns:
-        DGAdvectionSolver instance with the IC initialized and (if
-        requested) advanced to ``t = pre_advance_fraction * T``.
+        DGAdvectionSolver instance with the IC initialized, optionally
+        refined, and (if requested) advanced to
+        ``t = pre_advance_fraction * T``.
     """
     solver = DGAdvectionSolver(
         nop=4,
@@ -147,6 +163,13 @@ def setup_solver(icase, pre_advance_fraction=0.0):
         balance=False,
         verbose=False,
     )
+
+    if initial_refinement_level > 0:
+        solver.reset(
+            icase=icase,
+            refinement_mode='fixed',
+            refinement_level=initial_refinement_level,
+        )
 
     if pre_advance_fraction > 0:
         # T from the default training step_domain_fraction (0.05);
@@ -593,6 +616,79 @@ def make_figure(solver, target_idx, icase, pre_advance_fraction):
 
     return fig
 
+def make_figure_all_elements(solver, icase, pre_advance_fraction,
+                             initial_refinement_level):
+    """Build an N×3 ZZ visualization figure for all interior elements.
+
+    One row per interior element (indices 1 through n_active-2, skipping
+    the two boundary elements whose patches wrap periodically). Each row
+    contains the same three panels as the single-element figure: left-edge
+    patch, right-edge patch, and combined Ω_k view.
+
+    Args:
+        solver: DGAdvectionSolver instance with IC initialized.
+        icase: IC selector — included in the suptitle.
+        pre_advance_fraction: Pre-advance multiple of T — included in
+            the suptitle.
+        initial_refinement_level: Refinement level — included in the
+            suptitle for context.
+
+    Returns:
+        matplotlib Figure. Caller is responsible for saving.
+    """
+    n_active = len(solver.active)
+    interior = list(range(1, n_active - 1))
+
+    if not interior:
+        raise ValueError(
+            f"Need at least 3 active elements for interior-only figure "
+            f"(have {n_active})."
+        )
+
+    n_rows = len(interior)
+    fig, axes = plt.subplots(
+        nrows=n_rows, ncols=3,
+        figsize=(18, 4.5 * n_rows),
+        constrained_layout=True,
+    )
+
+    # If only one interior element, axes is 1D — normalize to 2D
+    if n_rows == 1:
+        axes = axes[np.newaxis, :]
+
+    # Compute ZZ errors once for row annotations
+    errors = compute_element_errors_zz(solver)
+
+    for row, idx in enumerate(interior):
+        ax_left, ax_right, ax_combined = axes[row]
+
+        plot_edge_panel(ax_left, solver, idx, edge_side='left')
+        plot_edge_panel(ax_right, solver, idx, edge_side='right')
+        plot_combined_panel(ax_combined, solver, idx)
+
+        # Row label on the left axis: element metadata
+        elem_id = int(solver.active[idx])
+        level = int(solver.label_mat[elem_id - 1][4])
+        x_l = solver.xelem[idx]
+        x_r = solver.xelem[idx + 1]
+        ax_left.set_ylabel(
+            f'Element {idx}  (id={elem_id}, lvl={level})\n'
+            f'x ∈ [{x_l:+.3f}, {x_r:+.3f}]\n'
+            f'e_k = {errors[idx]:.3e}\n\nu',
+            fontsize=9,
+        )
+
+    suptitle = (
+        f'ZZ error indicator — icase={icase}, '
+        f'{n_active} elements (refinement level {initial_refinement_level}), '
+        f'interior elements {interior[0]}–{interior[-1]}, '
+        f't={solver.time:.4f}  '
+        f'(pre-advance = {pre_advance_fraction:.2f}·T)'
+    )
+    fig.suptitle(suptitle, fontsize=12)
+
+    return fig
+
 def main():
     """CLI entry point. See module docstring for usage examples."""
     args = parse_args()
@@ -602,9 +698,12 @@ def main():
     # =====================================================================
     print(
         f"Setting up solver: icase={args.icase}, "
+        f"refinement_level={args.refinement_level}, "
         f"pre-advance = {args.pre_advance:.2f}·T"
     )
-    solver = setup_solver(args.icase, args.pre_advance)
+    solver = setup_solver(
+        args.icase, args.pre_advance, args.refinement_level
+    )
     print(f"  solver time:     t = {solver.time:.6f}")
     print(f"  active elements: {len(solver.active)}")
 
@@ -626,38 +725,7 @@ def main():
         )
 
     # =====================================================================
-    # 3. Resolve target element
-    # =====================================================================
-    if args.element is None:
-        # Auto-pick: argmax restricted to interior indices to avoid the
-        # wrapped patches at the periodic boundary
-        interior = list(range(1, n_active - 1))
-        if not interior:
-            raise SystemExit(
-                f"Auto-pick needs at least 3 active elements "
-                f"(have {n_active}). Use --element explicitly."
-            )
-        target_idx = max(interior, key=lambda i: errors[i])
-        print(
-            f"\nAuto-picked element: idx {target_idx} "
-            f"(largest ZZ error among interior elements)"
-        )
-    else:
-        if not 0 <= args.element < n_active:
-            raise SystemExit(
-                f"--element {args.element} out of range "
-                f"[0, {n_active - 1}]"
-            )
-        target_idx = args.element
-        print(f"\nUsing explicit element: idx {target_idx}")
-
-    # =====================================================================
-    # 4. Build figure
-    # =====================================================================
-    fig = make_figure(solver, target_idx, args.icase, args.pre_advance)
-
-    # =====================================================================
-    # 5. Save dual PDF + PNG
+    # 3. Build figure — all interior elements (default) or single element
     # =====================================================================
     output_dir = (
         args.output_dir
@@ -665,7 +733,46 @@ def main():
         else os.path.dirname(os.path.abspath(__file__))
     )
     os.makedirs(output_dir, exist_ok=True)
-    base_name = f"zz_visualization_{args.icase}_{target_idx}"
+
+    if args.element is None:
+        # Default: all interior elements in an N×3 grid
+        interior = list(range(1, n_active - 1))
+        if not interior:
+            raise SystemExit(
+                f"All-elements mode needs at least 3 active elements "
+                f"(have {n_active}). Use --element explicitly."
+            )
+        print(
+            f"\nAll-elements mode: {len(interior)} interior elements "
+            f"(indices {interior[0]}–{interior[-1]}, "
+            f"skipping boundary elements 0 and {n_active - 1})"
+        )
+
+        fig = make_figure_all_elements(
+            solver, args.icase, args.pre_advance, args.refinement_level
+        )
+        base_name = (
+            f"zz_visualization_{args.icase}_"
+            f"lvl{args.refinement_level}_all"
+        )
+    else:
+        # Explicit single-element mode (original behavior)
+        if not 0 <= args.element < n_active:
+            raise SystemExit(
+                f"--element {args.element} out of range "
+                f"[0, {n_active - 1}]"
+            )
+        target_idx = args.element
+        print(f"\nSingle-element mode: idx {target_idx}")
+
+        fig = make_figure(
+            solver, target_idx, args.icase, args.pre_advance
+        )
+        base_name = f"zz_visualization_{args.icase}_{target_idx}"
+
+    # =====================================================================
+    # 4. Save dual PDF + PNG
+    # =====================================================================
     pdf_path = os.path.join(output_dir, base_name + ".pdf")
     png_path = os.path.join(output_dir, base_name + ".png")
     fig.savefig(pdf_path, bbox_inches="tight")
