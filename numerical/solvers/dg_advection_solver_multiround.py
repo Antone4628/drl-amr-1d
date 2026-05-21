@@ -165,9 +165,6 @@ class DGAdvectionSolver:
         # Initialize forcing and DG operators
         self.f = self._initialize_forcing()
         self._update_matrices()
-        
-        # Solve for steady-state initial condition
-        self.q = self.steady_solve_improved()
 
     # =========================================================================
     # Initialization Methods
@@ -337,7 +334,7 @@ class DGAdvectionSolver:
         
         # Form RHS operator: D - F (differentiation minus flux)
         R = self.D - self.F
-        
+
         # Solve M * Dhat = R for the combined operator
         # Use lstsq instead of solve: on macOS Accelerate, solve() hangs
         # on singular matrices instead of raising LinAlgError.
@@ -347,6 +344,16 @@ class DGAdvectionSolver:
             print(f"  nelem={self.nelem}, npoin_dg={self.npoin_dg}")
             print(f"  Element sizes: {np.diff(self.xelem)}")
             print(f"  Active elements: {self.active}")
+        
+        # # Solve M * Dhat = R for the combined operator
+        # try:
+        #     self.Dhat = np.linalg.solve(self.M, R)
+        # except np.linalg.LinAlgError:
+        #     if self.verbose:
+        #         print("Matrix solve failed. Current mesh configuration:")
+        #         print(f"Number of elements: {self.nelem}")
+        #         print(f"Element sizes: {np.diff(self.xelem)}")
+        #     raise
 
     # =========================================================================
     # Query Methods
@@ -794,7 +801,8 @@ class DGAdvectionSolver:
             self.balance_mesh(self.balance)
     
     def reset(self, refinement_mode='none', refinement_level=0, 
-              refinement_probability=0.5, refinement_max_level=3):
+              refinement_probability=0.5, refinement_max_level=3,
+              icase=None):
         """
         Reset solver to initial state with optional refinement.
         
@@ -805,10 +813,16 @@ class DGAdvectionSolver:
             refinement_level: Target level for 'fixed' mode.
             refinement_probability: Probability for 'random' mode.
             refinement_max_level: Max level for 'random' mode.
+            icase: Test case identifier. If provided, switches the IC type
+                for this episode. If None, keeps the current icase.
             
         Returns:
             Initial solution vector.
         """
+        # Switch IC type if requested (multi-IC training support)
+        if icase is not None:
+            self.icase = icase
+        
         # Reset to original 4-element grid
         self.xelem = np.array([-1, -0.4, 0, 0.4, 1])
         self.nelem = len(self.xelem) - 1
@@ -845,10 +859,6 @@ class DGAdvectionSolver:
         self._update_matrices()
         self._compute_timestep(use_actual_max_level=True)
         self.verify_state()
-        
-        # Solve for steady state
-        self._update_forcing()
-        self.q = self.steady_solve_improved()
         
         return self.q
 
