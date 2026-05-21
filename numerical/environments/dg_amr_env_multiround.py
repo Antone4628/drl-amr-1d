@@ -45,7 +45,7 @@ from typing import Optional, Dict, Tuple, Any, List, Set
 
 from ..solvers.dg_advection_solver_multiround import DGAdvectionSolver
 from ..solvers.error_indicators import (
-    compute_element_errors,
+    compute_errors,
     compute_alpha_thresholds,
     compute_normalized_error,
     _find_neighbor_index,
@@ -97,6 +97,7 @@ class DGAMREnvMultiround(gym.Env):
         step_domain_fraction: float = 0.05,
         initial_refinement_level: int = 0,
         pre_advance_range: Tuple[float, float] = (0.6, 1.4),
+        error_indicator: str = 'raw_jump',
         ic_pool: Optional[List[int]] = None,
         verbosity: int = 0,
     ):
@@ -153,6 +154,14 @@ class DGAMREnvMultiround(gym.Env):
                 before the agent's first observation. Set to (0.0, 0.0) to
                 disable. Set to (1.0, 1.0) for deterministic single-T advance.
                 Uses Gymnasium-seeded RNG for reproducibility.
+            error_indicator: String key selecting the error indicator function
+                from INDICATOR_REGISTRY in error_indicators.py. Available:
+                'raw_jump' (boundary jump magnitude, original indicator) and
+                'zz_style' (ZZ-style patch projection, D-032). Additional
+                indicators can be registered in error_indicators.py and
+                selected here via config. Note: 'raw_jump' requires pre-advance
+                (D-029) for nonzero t=0 errors; other indicators typically
+                do not. See INDICATOR_REGISTRY for the full list.
             ic_pool: List of icase identifiers for IC sampling at episode
                 start. If None, uses full Stage 1A pool:
                 [1, 10, 12, 13, 14, 15, 16]. Includes ICs with negative
@@ -184,6 +193,7 @@ class DGAMREnvMultiround(gym.Env):
         self.step_domain_fraction = step_domain_fraction
         self.initial_refinement_level = initial_refinement_level
         self.pre_advance_range = pre_advance_range
+        self.error_indicator = error_indicator
 
         # =====================================================================
         # IC sampling pool 
@@ -706,7 +716,7 @@ class DGAMREnvMultiround(gym.Env):
         # Recompute thresholds from post-advance error distribution
         # These are fixed for the entire upcoming remesh interval (D-021).
         # =====================================================================
-        errors = compute_element_errors(self.solver)
+        errors = compute_errors(self.solver, self.error_indicator)
         self.e_max, self.e_min = compute_alpha_thresholds(
             errors, self.alpha, self.beta
         )
@@ -796,7 +806,7 @@ class DGAMREnvMultiround(gym.Env):
         n_active = len(self.solver.active)
         self.max_interval_errors = np.zeros(n_active)
 
-        errors = compute_element_errors(self.solver)
+        errors = compute_errors(self.solver, self.error_indicator)
         self.max_interval_errors = np.maximum(self.max_interval_errors, errors)
 
         # =====================================================================
@@ -818,7 +828,7 @@ class DGAMREnvMultiround(gym.Env):
             # Mesh is fixed during solver advance, so errors array stays
             # aligned with solver.active throughout
             # =================================================================
-            errors = compute_element_errors(self.solver)
+            errors = compute_errors(self.solver, self.error_indicator)
             self.max_interval_errors = np.maximum(
                 self.max_interval_errors, errors
             )
@@ -1045,7 +1055,7 @@ class DGAMREnvMultiround(gym.Env):
         # =====================================================================
         # Compute per-element errors for priority calculation
         # =====================================================================
-        errors = compute_element_errors(self.solver)
+        errors = compute_errors(self.solver, self.error_indicator)
         n_active = len(self.solver.active)
 
         # =====================================================================
@@ -1119,7 +1129,7 @@ class DGAMREnvMultiround(gym.Env):
         # the normalization denominator. For 1D with ~15 elements this
         # is cheap. Errors reflect current mesh state (post-action).
         # =====================================================================
-        errors = compute_element_errors(self.solver)
+        errors = compute_errors(self.solver, self.error_indicator)
         e_inf = np.max(errors) if len(errors) > 0 else 0.0
 
         # =====================================================================
@@ -1239,7 +1249,7 @@ class DGAMREnvMultiround(gym.Env):
         # Must happen BEFORE _execute_action() since refinement destroys
         # the element. Used by _compute_local_reward() for classification.
         # =====================================================================
-        errors = compute_element_errors(self.solver)
+        errors = compute_errors(self.solver, self.error_indicator)
         pre_action_error = errors[self.current_element_idx]
 
         pre_action_elem_id = int(self.solver.active[self.current_element_idx])
@@ -1463,6 +1473,16 @@ class DGAMREnvMultiround(gym.Env):
                           f"({int(np.ceil(advance_duration / dt))} steps)")
             self._log(2, f"  Solver time after pre-advance: "
                           f"{self.solver.time:.6f}")
+            # Warning: pre-advance is structurally required only for raw_jump
+            # (D-029). Other indicators (e.g., zz_style) produce nonzero errors
+            # at t=0 and don't need it. Pre-advance with non-raw-jump indicators
+            # is valid as a data-augmentation strategy but not structurally
+            # required. Set pre_advance_range=(0.0, 0.0) to disable.
+            if self.error_indicator != 'raw_jump':
+                self._log(1, f"  NOTE: pre-advance is active with "
+                              f"error_indicator='{self.error_indicator}'. "
+                              f"This is valid for augmentation but not "
+                              f"structurally required (D-029 targets raw_jump).")
 
         # =====================================================================
         # Compute initial error indicators and thresholds (Spec §9)
@@ -1470,7 +1490,7 @@ class DGAMREnvMultiround(gym.Env):
         # e_max = α · ||e||_∞  (refinement target)
         # e_min = e_max^β       (coarsening target)
         # =====================================================================
-        errors = compute_element_errors(self.solver)
+        errors = compute_errors(self.solver, self.error_indicator)
         self.e_max, self.e_min = compute_alpha_thresholds(
             errors, self.alpha, self.beta
         )

@@ -24,6 +24,8 @@ environment:
   step_domain_fraction: 0.05     # Wave travel per interval (Spec §4.1)
   initial_refinement_level: 0    # 0 = start from base mesh
   pre_advance_range: [0.6, 1.4]   # D-029: randomized pre-episode advance (multiples of T)
+  error_indicator: "raw_jump"      # Error indicator function (D-032). Options: raw_jump, zz_style
+                                   # Note: raw_jump requires pre-advance (D-029); zz_style does not
   ic_pool: [1, 10, 12, 13, 14, 15, 16]  # Multi-IC pool (Spec §11.1)
   verbosity: 0                   # 0=silent for training
 

@@ -1,0 +1,13 @@
+# ZZ-style indicator, refinement level 1, 100k steps
+# First training run with the ZZ error indicator (D-032, Phase Z3).
+# Starting from 8-element mesh (level 1) — agent has both refine
+# and coarsen options from the first round.
+# Pre-advance disabled: ZZ produces nonzero errors at t=0.
+
+environment:
+  error_indicator: "zz_style"
+  pre_advance_range: [0.0, 0.0]
+  initial_refinement_level: 1
+
+training:
+  total_timesteps: 100_000

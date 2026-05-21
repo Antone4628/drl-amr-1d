@@ -9,6 +9,7 @@ Key Functions:
     create_S_matrix: Build integration matrices for parent-child projection.
     create_scatters: Build scatter operators (parent → two children).
     create_gathers: Build gather operators (two children → parent).
+    create_zz_patch_projection: ZZ-style patch projection for error estimation (D-032).
 
 Mathematical Background:
     When refining an element, the parent solution must be "scattered" to two
@@ -273,4 +274,94 @@ def projections(RM, ngl, nq, wnq, xgl, xnq):
 
 
     return PS1, PS2, PG1, PG2
+
+
+# =============================================================================
+# ZZ-Style Patch Projection (D-032)
+# =============================================================================
+
+def create_zz_patch_projection(h_left, h_right, ngl, nq, wnq, xgl, xnq):
+    """Create the L²-projection operator for a two-element ZZ patch.
+    
+    Given two adjacent elements of physical widths h_left and h_right, returns
+    the matrix P that maps their stacked nodal values to the L²-best-fit
+    single degree-(ngl-1) polynomial across the patch:
+    
+        v_coeffs = P @ np.concatenate([u_left, u_right])
+    
+    where v_coeffs are the patch polynomial's nodal values at the patch's
+    own LGL nodes (on patch reference [-1, 1]). This is the projection
+    operator at the heart of the ZZ-style error estimator (D-032,
+    `zz_estimator_method.tex`).
+    
+    Mathematical derivation:
+        Find v ∈ P_p(R) minimizing ∫_R (u_h − v)² dx, where R = Ω_left ∪ Ω_right
+        and u_h is piecewise on the two elements. The variational equation is
+        
+            M_patch · v_coeffs = S_left · u_left + S_right · u_right
+        
+        with M_patch = (h_p/2)·∫₋₁¹ Lₐ^patch Lᵦ^patch dξ and
+        (S_e)_{a,b} = ∫_{Ω_e} φ_a^patch ψ_b^(e) dx. Both integrands are
+        degree 2(ngl−1) in their reference variable, so (xnq, wnq) must
+        provide LGL exactness up to that degree: 2nq−3 ≥ 2(ngl−1), i.e.,
+        nq ≥ ngl+1. For ngl=5 use nq=7.
+    
+    Args:
+        h_left: Physical width of the left element of the patch.
+        h_right: Physical width of the right element.
+        ngl: Number of LGL points per element (polynomial order + 1).
+        nq: Number of quadrature points. Must satisfy nq ≥ ngl + 1.
+        wnq: Quadrature weights, shape (nq,).
+        xgl: LGL interpolation nodes in reference [-1, 1], shape (ngl,).
+        xnq: Quadrature points in reference [-1, 1], shape (nq,).
+    
+    Returns:
+        P: Patch projection matrix, shape (ngl, 2*ngl). Apply via
+           v_coeffs = P @ np.concatenate([u_left, u_right]).
+    
+    Note:
+        Computed on-the-fly per patch since the base mesh is non-uniform
+        ([-1, -0.4, 0, 0.4, 1]) and refinement produces many distinct
+        width ratios. Cost is dominated by a single (ngl × ngl) inverse —
+        microseconds per call, negligible relative to the DG advance.
+    
+    See Also:
+        projections: Parent↔child projection operators (different geometry,
+            same M⁻¹S construction pattern, same quadrature API).
+        numerical.solvers.error_indicators.compute_element_errors_zz:
+            Consumer of this projection.
+    """
+    h_p = h_left + h_right
+    
+    # Map element-ref quadrature points to patch-ref coords for each side
+    xi_left  = (1.0 + xnq) * h_left  / h_p - 1.0
+    xi_right = (2.0 * h_left + (1.0 + xnq) * h_right) / h_p - 1.0
+    
+    # Element basis at element-ref quadrature: psi_elem[b, q] = L_b(xnq[q]).
+    # This also doubles as the patch basis at patch-ref quadrature, since
+    # both bases are LGL Lagrange on [-1, 1] and we use xnq as the
+    # quadrature in both frames.
+    psi_elem, _ = Lagrange_basis(ngl, nq, xgl, xnq)
+    
+    # Patch basis at the corresponding patch-ref quadrature points (per side):
+    # psi_patch_e[a, q] = L_a^patch(xi_e(xnq[q])).
+    psi_patch_left,  _ = Lagrange_basis(ngl, nq, xgl, xi_left)
+    psi_patch_right, _ = Lagrange_basis(ngl, nq, xgl, xi_right)
+    
+    Wnq = wnq[np.newaxis, :]  # broadcast helper
+    
+    # Patch mass matrix (consistent, integrated with the supplied quadrature):
+    # M_patch[a, b] = (h_p/2) ∫₋₁¹ L_a^patch L_b^patch dξ
+    M_patch = (h_p / 2.0) * ((psi_elem * Wnq) @ psi_elem.T)
+    
+    # Cross-mass matrices: integrate patch basis × element basis over each element.
+    # S_e[a, b] = (h_e/2) Σ_q wnq[q] · L_a^patch(xi_e(xnq[q])) · L_b(xnq[q])
+    S_left  = (h_left  / 2.0) * (psi_patch_left  * Wnq) @ psi_elem.T
+    S_right = (h_right / 2.0) * (psi_patch_right * Wnq) @ psi_elem.T
+    
+    # Combined projection: v_coeffs = M_patch⁻¹ (S_left u_left + S_right u_right)
+    M_inv = np.linalg.inv(M_patch)
+    P = M_inv @ np.hstack([S_left, S_right])  # shape (ngl, 2*ngl)
+    
+    return P
 
