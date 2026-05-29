@@ -13,9 +13,9 @@ The solver implements:
     - L2 projection for solution transfer between meshes
 
 The advection equation solved is:
-    ∂q/∂t + a * ∂q/∂x = f(x,t)
+    ∂q/∂t + c * ∂q/∂x = f(x,t)
     
-where 'a' is the wave speed and f is an optional forcing term.
+where 'c' is the wave speed and f is an optional forcing term.
 
 Example:
     >>> import numpy as np
@@ -34,7 +34,6 @@ References:
 """
 
 import numpy as np
-from scipy.sparse.linalg import gmres
 
 from ..dg.basis import lgl_gen, Lagrange_basis
 from ..dg.matrices import (
@@ -42,13 +41,15 @@ from ..dg.matrices import (
     create_diff_matrix, 
     Fmatrix_upwind_flux_bc, 
     Fmatrix_centered_flux,
-    Fmatrix_rusanov_flux,
     Matrix_DSS, 
     create_RM_matrix
 )
 from ..grid.mesh import create_grid_us
 from ..amr.forest import forest
-from ..amr.adapt import adapt_mesh, adapt_sol, mark, check_balance, enforce_balance
+from ..amr.adapt import (
+    adapt_mesh, adapt_sol, mark, check_balance, enforce_balance,
+    refine_single, coarsen_pair, project_refine_single, project_coarsen_single,
+)
 from ..amr.projection import projections
 from .utils import exact_solution, eff
 
@@ -531,8 +532,159 @@ class DGAdvectionSolver:
         
         return False
     
-    def adapt_mesh(self, criterion=1, marks_override=None, element_budget=None, 
-                   update_dt=True, balance=None):
+    def refine_element(self, active_idx):
+        """Refine a single element by splitting it into two children.
+
+        Calls the stateless primitives from adapt.py to update mesh topology
+        and project the solution. Rebuilds grid connectivity afterward.
+
+        Does NOT rebuild DG matrices (_update_matrices), forcing
+        (_update_forcing), or recompute timestep. The caller is responsible
+        for these after all mesh modifications (including balance enforcement)
+        are complete. This avoids redundant matrix rebuilds when balance
+        cascades follow the action.
+
+        Typical caller pattern (env._execute_action):
+            solver.refine_element(idx)
+            solver.balance_mesh(balance=True)   # may refine more elements
+            solver._update_matrices()
+            solver._update_forcing()
+
+        Args:
+            active_idx: Index into self.active (0-based) of the element
+                to refine.
+
+        Returns:
+            True if refinement was performed, False if element is already
+            at max_level.
+        """
+        # === Mesh topology via primitive ===
+        new_grid, new_active, success = refine_single(
+            self.nop, self.xelem, self.active, self.label_mat,
+            self.info_mat, active_idx, self.max_level,
+        )
+        if not success:
+            return False
+
+        # === Solution projection via primitive ===
+        ngl = self.ngl
+        parent_vals = self.q[active_idx * ngl : (active_idx + 1) * ngl]
+        child1_vals, child2_vals = project_refine_single(
+            parent_vals, self.PS1, self.PS2,
+        )
+        new_q = np.concatenate([
+            self.q[: active_idx * ngl],
+            child1_vals,
+            child2_vals,
+            self.q[(active_idx + 1) * ngl :],
+        ])
+
+        # === Update solver state ===
+        self.xelem = new_grid
+        self.active = new_active
+        self.nelem = len(new_active)
+        self.q = new_q
+        self.npoin_dg = ngl * self.nelem
+        self.npoin_cg = self.nop * self.nelem + 1
+
+        # === Rebuild grid connectivity ===
+        self.coord, self.intma, self.periodicity = create_grid_us(
+            self.ngl, self.nelem, self.npoin_cg, self.npoin_dg,
+            self.xgl, self.xelem,
+        )
+
+        return True
+    
+    def coarsen_element(self, active_idx):
+        """Coarsen an element by merging it with its sibling into their parent.
+
+        Finds the sibling in the active array, calls the stateless primitives
+        from adapt.py to update mesh topology and project the solution, and
+        rebuilds grid connectivity.
+
+        Does NOT rebuild DG matrices (_update_matrices), forcing
+        (_update_forcing), or recompute timestep. The caller is responsible
+        for these after all mesh modifications (including balance enforcement)
+        are complete. See refine_element() docstring for the typical caller
+        pattern.
+
+        Args:
+            active_idx: Index into self.active (0-based) of one of the two
+                siblings to coarsen. The method finds the other sibling
+                automatically.
+
+        Returns:
+            True if coarsening was performed, False if:
+            - Element is at level 0 (no parent)
+            - Sibling is not adjacent in the active array
+        """
+        elem = self.active[active_idx]
+        parent = self.label_mat[elem - 1][1]
+
+        # Level 0 elements have no parent — cannot coarsen
+        if parent == 0:
+            return False
+
+        # === Find sibling in adjacent active-array positions ===
+        sib_idx = None
+
+        # Check left neighbor
+        if active_idx > 0:
+            left_elem = self.active[active_idx - 1]
+            if self.label_mat[left_elem - 1][1] == parent:
+                sib_idx = active_idx - 1
+
+        # Check right neighbor
+        if sib_idx is None and active_idx < len(self.active) - 1:
+            right_elem = self.active[active_idx + 1]
+            if self.label_mat[right_elem - 1][1] == parent:
+                sib_idx = active_idx + 1
+
+        if sib_idx is None:
+            return False
+
+        # === Determine left/right ordering ===
+        left_idx = min(active_idx, sib_idx)
+        right_idx = max(active_idx, sib_idx)
+
+        # === Mesh topology via primitive ===
+        new_grid, new_active, success = coarsen_pair(
+            self.nop, self.xelem, self.active, self.label_mat,
+            left_idx, right_idx,
+        )
+        if not success:
+            return False
+
+        # === Solution projection via primitive ===
+        ngl = self.ngl
+        child1_vals = self.q[left_idx * ngl : (left_idx + 1) * ngl]
+        child2_vals = self.q[right_idx * ngl : (right_idx + 1) * ngl]
+        parent_vals = project_coarsen_single(
+            child1_vals, child2_vals, self.PG1, self.PG2,
+        )
+        new_q = np.concatenate([
+            self.q[: left_idx * ngl],
+            parent_vals,
+            self.q[(right_idx + 1) * ngl :],
+        ])
+
+        # === Update solver state ===
+        self.xelem = new_grid
+        self.active = new_active
+        self.nelem = len(new_active)
+        self.q = new_q
+        self.npoin_dg = ngl * self.nelem
+        self.npoin_cg = self.nop * self.nelem + 1
+
+        # === Rebuild grid connectivity ===
+        self.coord, self.intma, self.periodicity = create_grid_us(
+            self.ngl, self.nelem, self.npoin_cg, self.npoin_dg,
+            self.xgl, self.xelem,
+        )
+
+        return True
+    
+    def adapt_mesh(self, criterion=1, update_dt=True, balance=None):
         """
         Perform mesh adaptation based on marking criterion or explicit marks.
         
@@ -552,11 +704,8 @@ class DGAdvectionSolver:
         Raises:
             ValueError: If marks_override contains invalid element indices.
         """
-        # Generate marks from override or criterion
-        if marks_override is not None:
-            marks = self._process_marks_override(marks_override, element_budget)
-        else:
-            marks = mark(self.active, self.label_mat, self.intma, self.q, criterion)
+
+        marks = mark(self.active, self.label_mat, self.intma, self.q, criterion)
         
         # Store pre-adaptation state
         pre_coord = self.coord
@@ -601,88 +750,6 @@ class DGAdvectionSolver:
         if update_dt:
             self._compute_timestep(use_actual_max_level=True)
     
-    def _process_marks_override(self, marks_override, element_budget):
-        """
-        Process explicit refinement marks with budget and sibling checks.
-        
-        Args:
-            marks_override: Dict mapping element index to mark value.
-            element_budget: Maximum elements allowed.
-            
-        Returns:
-            Array of marks for all active elements.
-            
-        Raises:
-            ValueError: If element index is out of bounds.
-        """
-        marks = np.zeros(len(self.active), dtype=int)
-        
-        for idx, mark_val in marks_override.items():
-            if idx >= len(self.active):
-                raise ValueError(
-                    f"Index {idx} out of bounds for active array with "
-                    f"length {len(self.active)}"
-                )
-            
-            if mark_val == 1:
-                # Refinement: check budget
-                if element_budget is not None and len(self.active) >= element_budget:
-                    if self.verbose:
-                        print(f"Budget limit reached ({element_budget} elements). "
-                              f"Canceling refinement.")
-                    continue
-                marks[idx] = 1
-                
-            elif mark_val == -1:
-                # Coarsening: must mark both siblings
-                self._mark_coarsening_pair(idx, marks)
-        
-        return marks
-    
-    def _mark_coarsening_pair(self, idx, marks):
-        """
-        Mark element and its sibling for coarsening.
-        
-        Coarsening requires both children of a parent to be marked.
-        This method finds the sibling and marks both.
-        
-        Args:
-            idx: Index of element requesting coarsening.
-            marks: Marks array to update in place.
-        """
-        elem = self.active[idx]
-        if elem <= 0:
-            return
-            
-        parent = self.label_mat[elem - 1][1]
-        if parent == 0:
-            # Element is at level 0, cannot coarsen
-            return
-        
-        # Find sibling by checking neighbors with same parent
-        sibling = None
-        sibling_idx = None
-        
-        # Check element before
-        if elem > 1 and idx > 0:
-            if self.label_mat[elem - 2][1] == parent:
-                sibling = elem - 1
-                sibling_idx = idx - 1
-        
-        # Check element after
-        if sibling is None and elem < len(self.label_mat) and idx < len(self.active) - 1:
-            if self.label_mat[elem][1] == parent:
-                sibling = elem + 1
-                sibling_idx = idx + 1
-        
-        # Mark both if sibling found and active
-        if sibling is not None and sibling in self.active:
-            if self.verbose:
-                print(f"Marking element {elem} and sibling {sibling} for coarsening")
-            marks[idx] = -1
-            marks[sibling_idx] = -1
-        elif self.verbose:
-            print(f"No valid sibling found for element {elem}, skipping coarsening")
     
     def initialize_with_refinement(self, refinement_mode='none', refinement_level=2, 
                                    refinement_probability=0.5):
@@ -915,245 +982,3 @@ class DGAdvectionSolver:
         self.q = qp
         self.time += dt
     
-    def pseudo_step(self, dt=None):
-        """
-        Advance solution including forcing term.
-        
-        Similar to step() but includes the forcing term f in the RHS,
-        used for time-dependent problems with source terms.
-        
-        Args:
-            dt: Time step size. If None, uses self.dt.
-            
-        Returns:
-            Updated solution vector.
-        """
-        if dt is None:
-            dt = self.dt
-        
-        self._update_matrices()
-        self._update_forcing()
-        
-        # Low-storage RK coefficients
-        RKA = np.array([
-            0.0,
-            -567301805773.0/1357537059087.0,
-            -2404267990393.0/2016746695238.0,
-            -3550918686646.0/2091501179385.0,
-            -1275806237668.0/842570457699.0
-        ])
-        
-        RKB = np.array([
-            1432997174477.0/9575080441755.0,
-            5161836677717.0/13612068292357.0,
-            1720146321549.0/2090206949498.0,
-            3134564353537.0/4481467310338.0,
-            2277821191437.0/14882151754819.0
-        ])
-        
-        dq = np.zeros(self.npoin_dg)
-        qp = self.q.copy()
-        
-        for s in range(len(RKA)):
-            R = self.Dhat @ qp + self.f  # Include forcing
-            
-            for i in range(self.npoin_dg):
-                dq[i] = RKA[s] * dq[i] + dt * R[i]
-                qp[i] = qp[i] + RKB[s] * dq[i]
-            
-            if self.periodicity[-1] == self.periodicity[0]:
-                qp[-1] = qp[0]
-        
-        self.q = qp
-        self.time += dt
-        return qp
-    
-    def solve(self, time_final):
-        """
-        Integrate solution to specified final time.
-        
-        Performs time stepping with mesh adaptation at each step,
-        collecting solution snapshots for visualization/analysis.
-        
-        Args:
-            time_final: Final simulation time.
-            
-        Returns:
-            Tuple of (times, solutions, grids, coords) where each is a list
-            of snapshots at each time step.
-        """
-        times = [self.time]
-        solutions = [self.q.copy()]
-        grids = [self.xelem.copy()]
-        coords = [self.coord.copy()]
-        
-        step_count = 0
-        while self.time < time_final:
-            dt = min(self.dt, time_final - self.time)
-            
-            if self.verbose:
-                print(f"\nTimestep {step_count}, Time: {self.time:.3f}")
-            
-            # Adapt mesh based on current solution
-            self.adapt_mesh()
-            
-            # Take time step
-            self.step(dt)
-            
-            # Store results
-            times.append(self.time)
-            solutions.append(self.q.copy())
-            grids.append(self.xelem.copy())
-            coords.append(self.coord.copy())
-            step_count += 1
-        
-        return times, solutions, grids, coords
-
-    # =========================================================================
-    # Steady-State Solvers
-    # =========================================================================
-    
-    def steady_solve(self):
-        """
-        Solve steady advection equation using direct linear solve.
-        
-        Solves a * dq/dx = f with weak boundary conditions through the
-        flux matrices.
-        
-        Returns:
-            Steady-state solution vector.
-        """
-        # Non-periodic setup
-        periodicity_non_periodic = np.arange(self.npoin_dg)
-        
-        # Recompute matrices for non-periodic case
-        self.Me = create_mass_matrix(
-            self.intma, self.coord, self.nelem, self.ngl, 
-            self.nq, self.wnq, self.psi
-        )
-        self.De = create_diff_matrix(self.ngl, self.nq, self.wnq, self.psi, self.dpsi)
-        
-        M, D = Matrix_DSS(
-            self.Me, self.De, self.wave_speed, self.intma, 
-            periodicity_non_periodic, self.ngl, self.nelem, self.npoin_dg
-        )
-        
-        F_centered = Fmatrix_centered_flux(
-            self.intma, self.nelem, self.npoin_dg, self.ngl, self.wave_speed
-        )
-        F_upwind = Fmatrix_upwind_flux_bc(
-            self.intma, self.nelem, self.npoin_dg, self.ngl, 
-            self.wave_speed, periodic=False
-        )
-        
-        self._update_forcing()
-        
-        # Boundary condition
-        b = np.zeros(self.npoin_dg)
-        inflow_value = exact_solution(np.array([-1]), 1, self.time, self.icase)[0]
-        b[0] = inflow_value
-        
-        # Form and solve linear system
-        rhs = M @ self.f - F_upwind @ b
-        A = F_upwind - D
-        
-        try:
-            q_steady = np.linalg.solve(A, rhs)
-        except np.linalg.LinAlgError:
-            if self.verbose:
-                print("Using pseudoinverse due to ill-conditioning")
-            q_steady = np.linalg.pinv(A, rcond=1e-10) @ rhs
-        
-        self.q_steady = q_steady
-        
-        if self.verbose:
-            qe, _ = exact_solution(self.coord, self.npoin_dg, 0.0, self.icase)
-            l2_error = np.sqrt(np.sum((q_steady - qe)**2) / np.sum(qe**2))
-            print(f"Steady-state solution computed with L2 error: {l2_error:.2e}")
-        
-        return q_steady
-    
-    def steady_solve_improved(self):
-        """
-        Solve steady advection equation with strong boundary conditions.
-        
-        Uses direct enforcement of inflow BC by modifying the system matrix,
-        which is more robust than weak enforcement through fluxes.
-        
-        Returns:
-            Steady-state solution vector.
-        """
-        periodicity_non_periodic = np.arange(self.npoin_dg)
-        
-        self.Me = create_mass_matrix(
-            self.intma, self.coord, self.nelem, self.ngl, 
-            self.nq, self.wnq, self.psi
-        )
-        self.De = create_diff_matrix(self.ngl, self.nq, self.wnq, self.psi, self.dpsi)
-        
-        M, D = Matrix_DSS(
-            self.Me, self.De, self.wave_speed, self.intma, 
-            periodicity_non_periodic, self.ngl, self.nelem, self.npoin_dg
-        )
-        
-        F_upwind = Fmatrix_upwind_flux_bc(
-            self.intma, self.nelem, self.npoin_dg, self.ngl, 
-            self.wave_speed, periodic=False
-        )
-        
-        # Identify inflow boundary
-        left_boundary_idx = self.intma[0, 0]
-        inflow_value = exact_solution(np.array([-1]), 1, self.time, self.icase)[0]
-        
-        # Form system
-        A = F_upwind - D
-        rhs = M @ self.f
-        
-        # Strong enforcement: replace inflow equation
-        A[left_boundary_idx, :] = 0.0
-        A[left_boundary_idx, left_boundary_idx] = 1.0
-        rhs[left_boundary_idx] = inflow_value
-        
-        # Solve
-        q_steady = np.linalg.solve(A, rhs)
-        self.q_steady = q_steady
-        
-        return q_steady
-    
-    def steady_solve_direct(self):
-        """
-        Solve steady advection equation by direct integration.
-        
-        For the equation a * dq/dx = f, integrates directly along
-        characteristics from the inflow boundary.
-        
-        Returns:
-            Steady-state solution vector.
-        """
-        self._update_forcing()
-        f = self.f
-        x = self.coord
-        
-        # Inflow boundary condition
-        inflow_value = exact_solution(np.array([-1]), 1, self.time, self.icase)[0]
-        
-        # Sort by x for integration
-        sort_idx = np.argsort(x)
-        x_sorted = x[sort_idx]
-        f_sorted = f[sort_idx]
-        
-        # Integrate from inflow
-        q_sorted = np.zeros_like(x_sorted)
-        q_sorted[0] = inflow_value
-        
-        for i in range(1, len(x_sorted)):
-            dx = x_sorted[i] - x_sorted[i-1]
-            f_avg = 0.5 * (f_sorted[i] + f_sorted[i-1])
-            q_sorted[i] = q_sorted[i-1] + (dx / self.wave_speed) * f_avg
-        
-        # Map back to original ordering
-        q_steady = np.zeros_like(x)
-        for i, idx in enumerate(sort_idx):
-            q_steady[idx] = q_sorted[i]
-        
-        return q_steady

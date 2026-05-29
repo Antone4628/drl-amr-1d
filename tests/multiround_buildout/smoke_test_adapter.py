@@ -28,9 +28,9 @@ from numerical.solvers.error_indicators import (
     compute_errors,
     compute_alpha_thresholds,
     compute_normalized_error,
-    _find_neighbor_index,
 )
 from analysis.multiround.multiround_adapter import MultiroundAdapter
+from numerical.amr.mesh_utils import find_neighbor_index
 
 
 # =========================================================================
@@ -178,8 +178,8 @@ def task_3_observation_check():
     e_inf = np.max(errors)
     expected_error = compute_normalized_error(errors[0], 0.1, e_inf)
 
-    left_idx = _find_neighbor_index(solver, 0, direction='left')
-    right_idx = _find_neighbor_index(solver, 0, direction='right')
+    left_idx = find_neighbor_index(solver, 0, direction='left')
+    right_idx = find_neighbor_index(solver, 0, direction='right')
     expected_left_error = compute_normalized_error(
         errors[left_idx], 0.1, e_inf
     ) if left_idx >= 0 else 0.0

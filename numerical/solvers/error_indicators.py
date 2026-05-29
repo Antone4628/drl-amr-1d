@@ -37,58 +37,7 @@ import numpy as np
 
 from ..amr.projection import create_zz_patch_projection
 from ..dg.basis import Lagrange_basis
-
-
-# =========================================================================
-# Helper: Neighbor lookup
-# =========================================================================
-
-# _find_neighbor_index(solver, active_idx, direction)
-# Find index of left/right neighbor in solver.active with periodic wrapping.
-
-# def _find_neighbor_index(solver, active_idx, direction='left'):
-#     """Find the index of a neighbor element in the active list.
-    
-#     Handles periodic boundary conditions by wrapping at domain edges.
-    
-#     Args:
-#         solver: DGAdvectionSolver instance.
-#         active_idx: Index of the current element in solver.active.
-#         direction: 'left' or 'right'.
-    
-#     Returns:
-#         Index of the neighbor in solver.active, or -1 if not found.
-#     """
-#     elem = solver.active[active_idx]
-#     n_total = len(solver.label_mat)
-    
-#     if direction == 'left':
-#         target = elem - 1 if elem > 1 else n_total
-#     else:
-#         target = elem + 1 if elem < n_total else 1
-    
-#     found = np.where(solver.active == target)[0]
-#     return found[0] if len(found) > 0 else -1
-
-def _find_neighbor_index(solver, active_idx, direction='left'):
-    """Find the index of a neighbor element in the active list.
-
-    Uses active-list-based modular wrap for periodic boundary conditions.
-    Always succeeds — every active element has both neighbors under periodic BC.
-
-    Args:
-        solver: DGAdvectionSolver instance.
-        active_idx: Index of the current element in solver.active.
-        direction: 'left' or 'right'.
-
-    Returns:
-        Index of the neighbor in solver.active.
-    """
-    n_active = len(solver.active)
-    if direction == 'left':
-        return (active_idx - 1) % n_active
-    else:
-        return (active_idx + 1) % n_active
+from ..amr.mesh_utils import find_neighbor_index
 
 
 # =========================================================================
@@ -134,14 +83,14 @@ def compute_element_errors(solver):
         jumps = []
         
         # Left neighbor
-        left_idx = _find_neighbor_index(solver, i, direction='left')
+        left_idx = find_neighbor_index(solver, i, direction='left')
         if left_idx >= 0:
             left_nodes = solver.intma[:, left_idx]
             left_sol = solver.q[left_nodes]
             jumps.append(abs(elem_left - left_sol[-1]))
         
         # Right neighbor
-        right_idx = _find_neighbor_index(solver, i, direction='right')
+        right_idx = find_neighbor_index(solver, i, direction='right')
         if right_idx >= 0:
             right_nodes = solver.intma[:, right_idx]
             right_sol = solver.q[right_nodes]
@@ -317,7 +266,7 @@ def compute_element_errors_zz(solver):
         solver: DGAdvectionSolver instance with current mesh and solution.
             Must expose: q, intma, active, xelem, ngl, nq, wnq, xgl, xnq.
             Assumes periodic boundary conditions (every active element has
-            both neighbors via _find_neighbor_index's modular wrap).
+            both neighbors via find_neighbor_index's modular wrap).
 
     Returns:
         errors: np.ndarray of shape (n_active,) containing the ZZ-style
@@ -350,7 +299,7 @@ def compute_element_errors_zz(solver):
         u_k_at_q = psi_elem.T @ u_k  # u_h on Ω_k at quadrature pts, shape (nq,)
 
         # Left-edge patch (Ω_left, Ω_k) — Ω_k is the RIGHT element
-        left_idx = _find_neighbor_index(solver, i, direction='left')
+        left_idx = find_neighbor_index(solver, i, direction='left')
         u_left = solver.q[solver.intma[:, left_idx]]
         h_left = solver.xelem[left_idx + 1] - solver.xelem[left_idx]
         e_L_sq = _zz_patch_residual_squared(
@@ -359,7 +308,7 @@ def compute_element_errors_zz(solver):
         )
 
         # Right-edge patch (Ω_k, Ω_right) — Ω_k is the LEFT element
-        right_idx = _find_neighbor_index(solver, i, direction='right')
+        right_idx = find_neighbor_index(solver, i, direction='right')
         u_right = solver.q[solver.intma[:, right_idx]]
         h_right = solver.xelem[right_idx + 1] - solver.xelem[right_idx]
         e_R_sq = _zz_patch_residual_squared(
