@@ -48,8 +48,8 @@ from ..solvers.error_indicators import (
     compute_errors,
     compute_alpha_thresholds,
     compute_normalized_error,
-    _find_neighbor_index,
 )
+from ..amr.mesh_utils import find_neighbor_index
 
 
 class DGAMREnvMultiround(gym.Env):
@@ -530,8 +530,9 @@ class DGAMREnvMultiround(gym.Env):
         # =====================================================================
         # Map action index to mark value and label
         # =====================================================================
-        action_map = {0: (-1, 'coarsen'), 1: (0, 'hold'), 2: (1, 'refine')}
-        mark_val, action_label = action_map[action]
+
+        action_map = {0: 'coarsen', 1: 'hold', 2: 'refine'}
+        action_label = action_map[action]
 
         pre_n_active = len(self.solver.active)
         self._log(2, f"    Action: {action_label} on element "
@@ -552,37 +553,39 @@ class DGAMREnvMultiround(gym.Env):
             return result
 
         # =====================================================================
-        # Apply the agent's action WITHOUT balance enforcement
-        # adapt_mesh handles sibling marking for coarsening internally
-        # via _process_marks_override → _mark_coarsening_pair.
-        # element_budget=None: budget not enforced at solver level (D-025).
-        # update_dt=False: time step recomputed once before solver advance.
-        # balance=False: we handle balance separately for cascade tracking.
+        # Apply the agent's action via solver primitive (no matrix rebuild).
+        # refine_element / coarsen_element handle topology, solution
+        # projection, and grid connectivity. Matrix rebuild is deferred
+        # until after balance enforcement to avoid redundant computation.
         # =====================================================================
-        post_action_active_set = set(self.solver.active)  # snapshot before
-        self.solver.adapt_mesh(
-            marks_override={active_idx: mark_val},
-            element_budget=None,
-            update_dt=False,
-            balance=False,
-        )
+        if action == 2:
+            self.solver.refine_element(active_idx)
+        elif action == 0:
+            self.solver.coarsen_element(active_idx)
+
         post_action_active_set = set(self.solver.active)
 
         self._log(2, f"    Post-action: {len(self.solver.active)} elements")
 
         # =====================================================================
-        # Enforce 2:1 balance separately to track cascades
-        # balance_mesh returns True if it made changes but does NOT
-        # rebuild matrices — we must do that manually.
+        # Enforce 2:1 balance separately to track cascades.
+        # balance_mesh updates topology/solution/connectivity but does NOT
+        # rebuild DG matrices.
         # =====================================================================
         balanced = self.solver.balance_mesh(balance=True)
         post_balance_active_set = set(self.solver.active)
 
         if balanced:
-            # balance_mesh changed the mesh — rebuild operators
-            self.solver._update_matrices()
-            self.solver._update_forcing()
             self._log(2, f"    Post-balance: {len(self.solver.active)} elements")
+
+        # =====================================================================
+        # Rebuild DG matrices once for the final mesh state.
+        # Done unconditionally — the action always changes the mesh
+        # (hold returns early above). Single rebuild covers both the
+        # agent's action and any balance cascades.
+        # =====================================================================
+        self.solver._update_matrices()
+        self.solver._update_forcing()
 
         # =====================================================================
         # Detect and record cascade-created elements
@@ -1142,12 +1145,12 @@ class DGAMREnvMultiround(gym.Env):
         )
 
         # =====================================================================
-        # Neighbor lookup (periodic wrapping handled by _find_neighbor_index)
+        # Neighbor lookup (periodic wrapping handled by find_neighbor_index)
         # Returns -1 if no neighbor found (should not happen with periodic BC,
         # but handled defensively).
         # =====================================================================
-        left_idx = _find_neighbor_index(self.solver, active_idx, direction='left')
-        right_idx = _find_neighbor_index(self.solver, active_idx, direction='right')
+        left_idx = find_neighbor_index(self.solver, active_idx, direction='left')
+        right_idx = find_neighbor_index(self.solver, active_idx, direction='right')
 
         # =====================================================================
         # Normalized errors for left and right neighbors
